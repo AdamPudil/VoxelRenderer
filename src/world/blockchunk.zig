@@ -59,6 +59,7 @@ pub fn BlockChunk(
             const vz = lz % BLOCK_SIZE;
 
             self.chunk.data[self.chunk.index(bx, by, bz)].set(vx, vy, vz, v);
+            self.chunk.data[self.chunk.index(bx, by, bz)].setSolid(vx, vy, vz, 1);
         }
 
         pub fn upload(self: *Self, tex: *c_uint) void {

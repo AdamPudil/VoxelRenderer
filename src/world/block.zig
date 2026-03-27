@@ -5,11 +5,11 @@ pub fn Block(comptime T: type, comptime SIZE: usize) type {
     return struct {
         const Self = @This();
 
-        voxels: Chunk(T),
+        voxels: Chunk(T, 16, 16, 16),
 
         pub fn init(allocator: std.mem.Allocator) !Self {
             return Self{
-                .voxels = try Chunk(T).init(allocator, SIZE),
+                .voxels = try Chunk(T, 16, 16, 16).init(allocator, SIZE),
             };
         }
 

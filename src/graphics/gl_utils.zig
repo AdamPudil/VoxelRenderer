@@ -13,14 +13,43 @@ fn readFile(path: []const u8, allocator: std.mem.Allocator) ![]u8 {
     return try f.readToEndAlloc(allocator, 1 << 20);
 }
 
-fn compileShader(src: []const u8, kind: c_uint) c_uint {
-    const shader = gl.CreateShader(kind);
+fn compileShader(src: []const u8, kind: c_uint) !c_uint {
+    const shader = gl.createShader(kind);
 
     var ptrs: [1][*c]const u8 = .{src.ptr};
     var len: c_int = @intCast(src.len);
 
-    gl.ShaderSource(shader, 1, &ptrs, &len);
-    gl.CompileShader(shader);
+    gl.shaderSource(shader, 1, &ptrs, &len);
+    gl.compileShader(shader);
+
+    var ok: c_int = 0;
+    gl.getShaderiv(shader, c.GL_COMPILE_STATUS, &ok);
+
+    if (ok == 0) {
+        var log_len: c_int = 0;
+        gl.getShaderiv(shader, c.GL_INFO_LOG_LENGTH, &log_len);
+
+        const alloc_len: usize = @intCast(if (log_len > 1) log_len else 1024);
+        const log = try std.heap.page_allocator.alloc(u8, alloc_len);
+        defer std.heap.page_allocator.free(log);
+
+        var written: c_int = 0;
+        gl.getShaderInfoLog(shader, @intCast(log.len), &written, log.ptr);
+
+        const kind_name = if (kind == c.GL_VERTEX_SHADER)
+            "vertex"
+        else if (kind == c.GL_FRAGMENT_SHADER)
+            "fragment"
+        else
+            "unknown";
+
+        std.debug.print(
+            "{s} shader compile failed:\n{s}\n",
+            .{ kind_name, log[0..@intCast(if (written > 0) written else 0)] },
+        );
+
+        return error.ShaderCompileFailed;
+    }
 
     return shader;
 }
@@ -29,17 +58,41 @@ pub fn createProgram(vsPath: []const u8, fsPath: []const u8) !c_uint {
     const gpa = std.heap.page_allocator;
 
     const vs_src = try readFile(vsPath, gpa);
+    defer gpa.free(vs_src);
+
     const fs_src = try readFile(fsPath, gpa);
+    defer gpa.free(fs_src);
 
-    const vs = compileShader(vs_src, c.GL_VERTEX_SHADER);
-    const fs = compileShader(fs_src, c.GL_FRAGMENT_SHADER);
+    const vs = try compileShader(vs_src, c.GL_VERTEX_SHADER);
+    const fs = try compileShader(fs_src, c.GL_FRAGMENT_SHADER);
 
-    const prog = gl.CreateProgram();
+    const prog = gl.createProgram();
 
-    gl.AttachShader(prog, vs);
-    gl.AttachShader(prog, fs);
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
 
-    gl.LinkProgram(prog);
+    var ok: c_int = 0;
+    gl.getProgramiv(prog, c.GL_LINK_STATUS, &ok);
+
+    if (ok == 0) {
+        var log_len: c_int = 0;
+        gl.getProgramiv(prog, c.GL_INFO_LOG_LENGTH, &log_len);
+
+        const alloc_len: usize = @intCast(if (log_len > 1) log_len else 1024);
+        const log = try gpa.alloc(u8, alloc_len);
+        defer gpa.free(log);
+
+        var written: c_int = 0;
+        gl.getProgramInfoLog(prog, @intCast(log.len), &written, log.ptr);
+
+        std.debug.print(
+            "program link failed:\n{s}\n",
+            .{log[0..@intCast(if (written > 0) written else 0)]},
+        );
+
+        return error.ProgramLinkFailed;
+    }
 
     return prog;
 }

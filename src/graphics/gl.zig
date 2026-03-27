@@ -2,34 +2,38 @@ const c = @cImport({
     @cInclude("GL/glew.h");
 });
 
-pub fn GenVertexArrays(n: c_int, arr: [*c]c_uint) void {
+pub fn genVertexArrays(n: c_int, arr: [*c]c_uint) void {
     c.__glewGenVertexArrays.?(n, arr);
 }
-pub fn BindVertexArray(v: c_uint) void {
+pub fn bindVertexArray(v: c_uint) void {
     c.__glewBindVertexArray.?(v);
 }
-pub fn CreateShader(t: c_uint) c_uint {
+pub fn createShader(t: c_uint) c_uint {
     return c.__glewCreateShader.?(t);
 }
-pub fn ShaderSource(s: c_uint, count: c_int, src: [*c][*c]const u8, len: [*c]c_int) void {
+pub fn shaderSource(s: c_uint, count: c_int, src: [*c][*c]const u8, len: [*c]c_int) void {
     c.__glewShaderSource.?(s, count, src, len);
 }
-pub fn CompileShader(s: c_uint) void {
+pub fn compileShader(s: c_uint) void {
     c.__glewCompileShader.?(s);
 }
-pub fn CreateProgram() c_uint {
+pub fn createProgram() c_uint {
     return c.__glewCreateProgram.?();
 }
-pub fn AttachShader(p: c_uint, s: c_uint) void {
+
+pub fn attachShader(p: c_uint, s: c_uint) void {
     c.__glewAttachShader.?(p, s);
 }
-pub fn LinkProgram(p: c_uint) void {
+
+pub fn linkProgram(p: c_uint) void {
     c.__glewLinkProgram.?(p);
 }
-pub fn UseProgram(p: c_uint) void {
+
+pub fn useProgram(p: c_uint) void {
     c.__glewUseProgram.?(p);
 }
-pub fn TexImage3D(
+
+pub fn texImage3D(
     target: c_uint,
     level: c_int,
     internal: c_int,
@@ -43,31 +47,45 @@ pub fn TexImage3D(
 ) void {
     c.__glewTexImage3D.?(target, level, internal, w, h, d, border, format, typ, data);
 }
-pub fn ActiveTexture(t: c_uint) void {
+pub fn activeTexture(t: c_uint) void {
     c.__glewActiveTexture.?(t);
 }
-pub fn GetUniformLocation(p: c_uint, name: [*:0]const u8) c_int {
+
+pub fn getUniformLocation(p: c_uint, name: [*:0]const u8) c_int {
     return c.__glewGetUniformLocation.?(p, name);
 }
-pub fn Uniform1i(loc: c_int, v: c_int) void {
+
+pub fn uniform1i(loc: c_int, v: c_int) void {
     c.__glewUniform1i.?(loc, v);
 }
-pub fn Uniform3fv(loc: c_int, count: c_int, ptr: [*c]const f32) void {
+
+pub fn uniform3fv(loc: c_int, count: c_int, ptr: [*c]const f32) void {
     c.__glewUniform3fv.?(loc, count, ptr);
 }
-pub fn Uniform2fv(loc: c_int, count: c_int, ptr: [*c]const f32) void {
+
+pub fn uniform2fv(loc: c_int, count: c_int, ptr: [*c]const f32) void {
     c.__glewUniform2fv.?(loc, count, ptr);
 }
 
-pub fn Uniform3i(loc: c_int, x: c_int, y: c_int, z: c_int) void {
+pub fn uniform3i(loc: c_int, x: c_int, y: c_int, z: c_int) void {
     c.__glewUniform3i.?(loc, x, y, z);
 }
 
-pub fn Uniform1f(loc: c_int, v: f32) void {
+pub fn uniform1f(loc: c_int, v: f32) void {
     c.__glewUniform1f.?(loc, v);
 }
 
-pub fn TexSubImage3D(
+pub fn uniform2f(location: c.GLint, v0: c.GLfloat, v1: c.GLfloat) Error!void {
+    const f = c.__glewUniform2f orelse return Error.MissingOpenGLFunction;
+    f(location, v0, v1);
+}
+
+pub fn uniform3f(location: c.GLint, v0: c.GLfloat, v1: c.GLfloat, v2: c.GLfloat) Error!void {
+    const f = c.__glewUniform3f orelse return Error.MissingOpenGLFunction;
+    f(location, v0, v1, v2);
+}
+
+pub fn texSubImage3D(
     target: c_uint,
     level: c_int,
     xoffset: c_int,
@@ -95,18 +113,69 @@ pub fn TexSubImage3D(
     );
 }
 
-pub fn GetShaderiv(shader: c_uint, pname: c_uint, params: *c_int) void {
+pub fn getShaderiv(shader: c_uint, pname: c_uint, params: *c_int) void {
     c.__glewGetShaderiv.?(shader, pname, params);
 }
 
-pub fn GetProgramiv(program: c_uint, pname: c_uint, params: *c_int) void {
+pub fn getProgramiv(program: c_uint, pname: c_uint, params: *c_int) void {
     c.__glewGetProgramiv.?(program, pname, params);
 }
 
-pub fn GetShaderInfoLog(shader: c_uint, bufSize: c_int, length: ?*c_int, infoLog: [*c]u8) void {
+pub fn getShaderInfoLog(shader: c_uint, bufSize: c_int, length: ?*c_int, infoLog: [*c]u8) void {
     c.__glewGetShaderInfoLog.?(shader, bufSize, length, infoLog);
 }
 
-pub fn GetProgramInfoLog(program: c_uint, bufSize: c_int, length: ?*c_int, infoLog: [*c]u8) void {
+pub fn getProgramInfoLog(program: c_uint, bufSize: c_int, length: ?*c_int, infoLog: [*c]u8) void {
     c.__glewGetProgramInfoLog.?(program, bufSize, length, infoLog);
+}
+
+pub const Error = error{
+    MissingOpenGLFunction,
+};
+
+pub fn genBuffers(n: c.GLsizei, buffers: *c.GLuint) Error!void {
+    const f = c.__glewGenBuffers orelse return Error.MissingOpenGLFunction;
+    f(n, buffers);
+}
+
+pub fn deleteBuffers(n: c.GLsizei, buffers: *const c.GLuint) Error!void {
+    const f = c.__glewDeleteBuffers orelse return Error.MissingOpenGLFunction;
+    f(n, buffers);
+}
+
+pub fn bindBuffer(target: c.GLenum, buffer: c.GLuint) Error!void {
+    const f = c.__glewBindBuffer orelse return Error.MissingOpenGLFunction;
+    f(target, buffer);
+}
+
+pub fn bufferData(
+    target: c.GLenum,
+    size: c.GLsizeiptr,
+    data: ?*const anyopaque,
+    usage: c.GLenum,
+) Error!void {
+    const f = c.__glewBufferData orelse return Error.MissingOpenGLFunction;
+    f(target, size, data, usage);
+}
+
+pub fn bindBufferBase(target: c.GLenum, index: c.GLuint, buffer: c.GLuint) Error!void {
+    const f = c.__glewBindBufferBase orelse return Error.MissingOpenGLFunction;
+    f(target, index, buffer);
+}
+
+pub fn genTextures(n: c.GLsizei, textures: *c.GLuint) void {
+    c.glGenTextures(n, textures);
+}
+
+pub fn deleteTextures(n: c.GLsizei, textures: *const c.GLuint) void {
+    c.glDeleteTextures(n, textures);
+}
+
+pub fn bindTexture(target: c.GLenum, texture: c.GLuint) void {
+    c.glBindTexture(target, texture);
+}
+
+pub fn texBuffer(target: c.GLenum, internalformat: c.GLenum, buffer: c.GLuint) Error!void {
+    const f = c.__glewTexBuffer orelse return Error.MissingOpenGLFunction;
+    f(target, internalformat, buffer);
 }

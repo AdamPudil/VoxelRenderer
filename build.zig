@@ -23,6 +23,9 @@ pub fn build(b: *std.Build) void {
         .flags = &[_][]const u8{},
     });
 
+    //const zg = b.dependency("zig-gamedev", .{});
+    //exe.root_module.addImport("zmath", zg.module("zmath"));
+
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

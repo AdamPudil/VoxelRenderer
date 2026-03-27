@@ -4,6 +4,7 @@ const gl_utils = @import("graphics/gl_utils.zig");
 const fps = @import("utils/FPScounter.zig");
 //const BlockChunk = @import("world/blockchunk.zig").BlockChunk;
 const World = @import("world/world.zig").World;
+//const zmath = @import("zmath");
 
 const c = @cImport({
     @cInclude("GL/glew.h");
@@ -16,6 +17,9 @@ const LOOK_SPEED: f32 = 0.002;
 const SIZE = 16;
 
 const res = [2]f32{ 1280, 720 };
+
+const STREAM_CHUNKS_XZ = 32;
+const STREAM_CHUNKS_Y = 16;
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -30,8 +34,8 @@ pub fn main() !void {
     var fps_counter = try fps.FpsCounter.init();
 
     var vao: c_uint = 0;
-    gl.GenVertexArrays(1, &vao);
-    gl.BindVertexArray(vao);
+    gl.genVertexArrays(1, &vao);
+    gl.bindVertexArray(vao);
 
     // load shaders
     const program = try gl_utils.createProgram("src/graphics/voxel.vs", "src/graphics/voxel.fs");
@@ -39,13 +43,15 @@ pub fn main() !void {
     std.debug.print("program = {}\n", .{program});
 
     // camera
-    var cam_pos = [3]f32{ -20, 70, 16 * 8 + 20 };
+    var cam_pos = [3]f32{ 0, 70, 0 };
     var yaw: f32 = 3.14;
     var pitch: f32 = 0;
 
     // ---- voxel data ----
-    var world = World(u16, 32, 32, 8).init(allocator);
-    defer world.deinit();
+    var world = try World(u16, SIZE, STREAM_CHUNKS_XZ, STREAM_CHUNKS_Y).init(allocator);
+    defer world.deinit() catch |err| {
+        std.debug.print("{}", .{err});
+    };
 
     //  try world.generate(cam_pos);
 
@@ -59,17 +65,22 @@ pub fn main() !void {
     //c.glTexParameteri(c.GL_TEXTURE_3D, c.GL_TEXTURE_MAG_FILTER, c.GL_NEAREST);
 
     // uniforms
-    const texLoc = gl.GetUniformLocation(program, "voxels");
-    const camPosLoc = gl.GetUniformLocation(program, "camPos");
-    const camDirLoc = gl.GetUniformLocation(program, "camDir");
-    const resLoc = gl.GetUniformLocation(program, "res");
-    const worldOriginLoc = gl.GetUniformLocation(program, "worldOrigin");
-    const streamedSizeLoc = gl.GetUniformLocation(program, "streamedSize");
+    const resLoc = gl.getUniformLocation(program, "uResolution");
+    const camPosLoc = gl.getUniformLocation(program, "uCamPos");
+    const camDirLoc = gl.getUniformLocation(program, "uCamDir");
+    const regionOriginLoc = gl.getUniformLocation(program, "uRegionOriginChunk");
+    const regionSizeLoc = gl.getUniformLocation(program, "uRegionSizeChunks");
+
+    const activeTexLoc = gl.getUniformLocation(program, "uChunkActiveTex");
+    const bitmapTexLoc = gl.getUniformLocation(program, "uBitmapTex");
+    const voxelTexLoc = gl.getUniformLocation(program, "uVoxelTex");
 
     c.glfwSetInputMode(window, c.GLFW_CURSOR, c.GLFW_CURSOR_DISABLED);
 
     var lastX: f64 = 640;
     var lastY: f64 = 360;
+
+    gl.useProgram(program);
 
     while (c.glfwWindowShouldClose(window) == 0) {
         // precalsulate mouse
@@ -134,31 +145,38 @@ pub fn main() !void {
         fps_counter.update();
 
         c.glClear(c.GL_COLOR_BUFFER_BIT);
-        gl.UseProgram(program);
+
+        gl.uniform1i(activeTexLoc, 0);
+        gl.uniform1i(bitmapTexLoc, 1);
+        gl.uniform1i(voxelTexLoc, 2);
 
         // render / prepare streamed texture
-        const tex = try world.render(cam_pos);
-        gl.ActiveTexture(c.GL_TEXTURE0);
-        c.glBindTexture(c.GL_TEXTURE_3D, tex);
+        try world.render(cam_pos);
+
+        try world.bindGpuTextures();
 
         // uniforms
-        gl.Uniform1i(texLoc, 0);
-        gl.Uniform3fv(camPosLoc, 1, &cam_pos);
-        gl.Uniform3fv(camDirLoc, 1, &forward);
-        gl.Uniform2fv(resLoc, 1, &res);
-
-        gl.Uniform3i(
-            worldOriginLoc,
-            @intCast(world.gpu_region_origin[0]),
-            @intCast(world.gpu_region_origin[1]),
-            @intCast(world.gpu_region_origin[2]),
+        try gl.uniform2f(
+            resLoc,
+            res[0],
+            res[1],
         );
 
-        gl.Uniform3i(
-            streamedSizeLoc,
-            @intCast(world.streamed_voxel_size[0]),
-            @intCast(world.streamed_voxel_size[1]),
-            @intCast(world.streamed_voxel_size[2]),
+        try gl.uniform3f(camPosLoc, cam_pos[0], cam_pos[1], cam_pos[2]);
+        try gl.uniform3f(camDirLoc, forward[0], forward[1], forward[2]);
+
+        gl.uniform3i(
+            regionOriginLoc,
+            world.gpu_region_origin_chunk[0],
+            world.gpu_region_origin_chunk[1],
+            world.gpu_region_origin_chunk[2],
+        );
+
+        gl.uniform3i(
+            regionSizeLoc,
+            STREAM_CHUNKS_XZ,
+            STREAM_CHUNKS_Y,
+            STREAM_CHUNKS_XZ,
         );
 
         // draw
