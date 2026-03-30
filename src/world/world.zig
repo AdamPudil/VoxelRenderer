@@ -1,7 +1,10 @@
 const std = @import("std");
 const Chunk = @import("chunk.zig").Chunk;
 const gl = @import("../graphics/gl.zig");
-const noise = @import("generation/noises.zig");
+
+const genUtil = @import("generation//utils.zig");
+const noise = @import("generation/noises2d.zig");
+const noise3d = @import("generation/noises3d.zig");
 
 const c = @cImport({
     @cInclude("GL/glew.h");
@@ -148,67 +151,12 @@ pub fn World(
             menger_world,
             pyramid_repeat,
             octahedron_repeat,
+            organic_repeat,
+            cave_crystals_repeat,
+            voronoi_border_repeat,
+            voronoi_border_world,
+            voronoi_edges_world,
         };
-
-        fn posMod(a: i32, b: i32) i32 {
-            return @mod(a, b);
-        }
-
-        fn abs32(x: i32) i32 {
-            return if (x < 0) -x else x;
-        }
-
-        fn chunkHash3(x: i32, y: i32, z: i32) u32 {
-            var h: u32 = @as(u32, @bitCast(x)) *% 0x85ebca6b;
-            h ^= @as(u32, @bitCast(y)) *% 0xc2b2ae35;
-            h = (h << 13) | (h >> 19);
-            h ^= @as(u32, @bitCast(z)) *% 0x27d4eb2d;
-            h ^= h >> 16;
-            h *%= 0x7feb352d;
-            h ^= h >> 15;
-            h *%= 0x846ca68b;
-            h ^= h >> 16;
-            return h;
-        }
-
-        fn inMenger(x: i32, y: i32, z: i32) bool {
-            var xx: u32 = @intCast(if (x < 0) -x else x);
-            var yy: u32 = @intCast(if (y < 0) -y else y);
-            var zz: u32 = @intCast(if (z < 0) -z else z);
-
-            while (xx > 0 or yy > 0 or zz > 0) {
-                const mx = xx % 3;
-                const my = yy % 3;
-                const mz = zz % 3;
-
-                if ((mx == 1 and my == 1) or
-                    (mx == 1 and mz == 1) or
-                    (my == 1 and mz == 1))
-                {
-                    return false;
-                }
-
-                xx /= 3;
-                yy /= 3;
-                zz /= 3;
-            }
-
-            return true;
-        }
-
-        fn inPyramidLocal(x: i32, y: i32, z: i32, size: i32) bool {
-            const cx = size >> 1;
-            const cz = cx;
-            const radius = (size - 1) - y;
-            if (radius < 0) return false;
-
-            return abs32(x - cx) <= radius and abs32(z - cz) <= radius;
-        }
-
-        fn inOctahedronLocal(x: i32, y: i32, z: i32, size: i32) bool {
-            const ch = size >> 1;
-            return abs32(x - ch) + abs32(y - ch) + abs32(z - ch) <= ch;
-        }
 
         fn fillFractalChunk(
             chunk: *Chunk(T, 16, 16, 16),
@@ -217,10 +165,10 @@ pub fn World(
             cz: i32,
             mode: GenMode,
         ) void {
-            const h = chunkHash3(cx, cy, cz);
+            //const h = chunkHash3(cx, cy, cz);
 
             // keep 25% empty chunks for debug visibility
-            if ((h & 3) == 0) return;
+            //if ((h & 3) == 0) return;
 
             const size_i32: i32 = @intCast(CHUNK_SIZE);
 
@@ -237,27 +185,56 @@ pub fn World(
 
                         const solid = switch (mode) {
                             // repeats every chunk, but decided per voxel
-                            .menger_repeat => inMenger(
-                                posMod(wx, size_i32),
-                                posMod(wy, size_i32),
-                                posMod(wz, size_i32),
+                            .menger_repeat => noise3d.inMenger(
+                                genUtil.posMod(wx, size_i32),
+                                genUtil.posMod(wy, size_i32),
+                                genUtil.posMod(wz, size_i32),
                             ),
 
                             // one continuous world-space fractal
-                            .menger_world => inMenger(wx, wy, wz),
+                            .menger_world => noise3d.inMenger(wx, wy, wz),
 
-                            .pyramid_repeat => inPyramidLocal(
-                                posMod(wx, size_i32),
-                                posMod(wy, size_i32),
-                                posMod(wz, size_i32),
+                            .pyramid_repeat => noise3d.inPyramidLocal(
+                                genUtil.posMod(wx, size_i32),
+                                genUtil.posMod(wy, size_i32),
+                                genUtil.posMod(wz, size_i32),
                                 size_i32,
                             ),
 
-                            .octahedron_repeat => inOctahedronLocal(
-                                posMod(wx, size_i32),
-                                posMod(wy, size_i32),
-                                posMod(wz, size_i32),
+                            .octahedron_repeat => noise3d.inOctahedronLocal(
+                                genUtil.posMod(wx, size_i32),
+                                genUtil.posMod(wy, size_i32),
+                                genUtil.posMod(wz, size_i32),
                                 size_i32,
+                            ),
+                            .organic_repeat => noise3d.inOrganicLocal(
+                                genUtil.posMod(wx, size_i32),
+                                genUtil.posMod(wy, size_i32),
+                                genUtil.posMod(wz, size_i32),
+                                size_i32,
+                            ),
+                            .cave_crystals_repeat => noise3d.inCaveCrystalsLocal(
+                                genUtil.posMod(wx, size_i32),
+                                genUtil.posMod(wy, size_i32),
+                                genUtil.posMod(wz, size_i32),
+                                size_i32,
+                            ),
+                            .voronoi_border_repeat => noise3d.inVoronoiBorderLocal(
+                                genUtil.posMod(wx, size_i32),
+                                genUtil.posMod(wy, size_i32),
+                                genUtil.posMod(wz, size_i32),
+                                size_i32,
+                            ),
+
+                            .voronoi_border_world => noise3d.inVoronoiBorderWorld(
+                                wx,
+                                wy,
+                                wz,
+                            ),
+                            .voronoi_edges_world => noise3d.inVoronoiFaceEdgesWorld(
+                                wx,
+                                wy,
+                                wz,
                             ),
                         };
 
@@ -443,195 +420,195 @@ pub fn World(
             self.gpu_dirty = false;
         }
 
-        fn uploadChunkToTexture(self: *Self, chunk_x: usize, chunk_y: usize, chunk_z: usize, world_cx: i32, world_cy: i32, world_cz: i32) !void {
-            const maybe_chunk = self.chunks.getPtr(.{ .x = world_cx, .y = world_cy, .z = world_cz });
+        //fn uploadChunkToTexture(self: *Self, chunk_x: usize, chunk_y: usize, chunk_z: usize, world_cx: i32, world_cy: i32, world_cz: i32) !void {
+        //   const maybe_chunk = self.chunks.getPtr(.{ .x = world_cx, .y = world_cy, .z = world_cz });
+        //
+        //   const count = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
+        //   var buffer = try self.allocator.alloc(T, count);
+        //   defer self.allocator.free(buffer);
+        //   @memset(buffer, @as(T, 0));
+        //
+        //   if (maybe_chunk) |chunk| {
+        //       for (0..CHUNK_SIZE) |lz| {
+        //           for (0..CHUNK_SIZE) |ly| {
+        //               for (0..CHUNK_SIZE) |lx| {
+        //                   const idx = lx + ly * CHUNK_SIZE + lz * CHUNK_SIZE * CHUNK_SIZE;
+        //                   buffer[idx] = chunk.getVoxel(lx, ly, lz);
+        //               }
+        //           }
+        //       }
+        //   }
+        //
+        //   gl.ActiveTexture(c.GL_TEXTURE0);
+        //   c.glBindTexture(c.GL_TEXTURE_3D, self.tex);
+        //
+        //   gl.TexSubImage3D(
+        //       c.GL_TEXTURE_3D,
+        //       0,
+        //       @intCast(chunk_x * CHUNK_SIZE),
+        //       @intCast(chunk_y * CHUNK_SIZE),
+        //       @intCast(chunk_z * CHUNK_SIZE),
+        //       @intCast(CHUNK_SIZE),
+        //       @intCast(CHUNK_SIZE),
+        //       @intCast(CHUNK_SIZE),
+        //       c.GL_RED_INTEGER,
+        //       c.GL_UNSIGNED_SHORT,
+        //       buffer.ptr,
+        //   );
+        //}
 
-            const count = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
-            var buffer = try self.allocator.alloc(T, count);
-            defer self.allocator.free(buffer);
-            @memset(buffer, @as(T, 0));
-
-            if (maybe_chunk) |chunk| {
-                for (0..CHUNK_SIZE) |lz| {
-                    for (0..CHUNK_SIZE) |ly| {
-                        for (0..CHUNK_SIZE) |lx| {
-                            const idx = lx + ly * CHUNK_SIZE + lz * CHUNK_SIZE * CHUNK_SIZE;
-                            buffer[idx] = chunk.getVoxel(lx, ly, lz);
-                        }
-                    }
-                }
-            }
-
-            gl.ActiveTexture(c.GL_TEXTURE0);
-            c.glBindTexture(c.GL_TEXTURE_3D, self.tex);
-
-            gl.TexSubImage3D(
-                c.GL_TEXTURE_3D,
-                0,
-                @intCast(chunk_x * CHUNK_SIZE),
-                @intCast(chunk_y * CHUNK_SIZE),
-                @intCast(chunk_z * CHUNK_SIZE),
-                @intCast(CHUNK_SIZE),
-                @intCast(CHUNK_SIZE),
-                @intCast(CHUNK_SIZE),
-                c.GL_RED_INTEGER,
-                c.GL_UNSIGNED_SHORT,
-                buffer.ptr,
-            );
-        }
-
-        fn uploadEdgeForMove(self: *Self, old_origin: [3]i32, new_origin: [3]i32) !void {
-            const dx = new_origin[0] - old_origin[0];
-            const dy = new_origin[1] - old_origin[1];
-            const dz = new_origin[2] - old_origin[2];
-
-            const moved_axes =
-                @as(i32, if (dx != 0) 1 else 0) +
-                @as(i32, if (dy != 0) 1 else 0) +
-                @as(i32, if (dz != 0) 1 else 0);
-
-            if (moved_axes != 1) {
-                try self.uploadFullRegion(new_origin);
-                return;
-            }
-
-            if ((dx != 0 and @abs(dx) != 1) or (dy != 0 and @abs(dy) != 1) or (dz != 0 and @abs(dz) != 1)) {
-                try self.uploadFullRegion(new_origin);
-                return;
-            }
-
-            // This version keeps the old texture layout and overwrites the newly visible edge.
-            // It is not a full ring-buffer yet, so it is only safe as a "lighter step" when you
-            // also treat the texture logically as the new region after edge upload.
-            // If you see spatial mismatch while moving, switch this fallback to full rebuild.
-
-            if (dx == 1) {
-                const chunk_x = STREAM_CHUNKS_XZ - 1;
-                const world_cx = new_origin[0] + @as(i32, @intCast(chunk_x));
-                for (0..STREAM_CHUNKS_Y) |chunk_y| {
-                    for (0..STREAM_CHUNKS_XZ) |chunk_z| {
-                        try self.uploadChunkToTexture(
-                            chunk_x,
-                            chunk_y,
-                            chunk_z,
-                            world_cx,
-                            new_origin[1] + @as(i32, @intCast(chunk_y)),
-                            new_origin[2] + @as(i32, @intCast(chunk_z)),
-                        );
-                    }
-                }
-            } else if (dx == -1) {
-                const chunk_x: usize = 0;
-                const world_cx = new_origin[0];
-                for (0..STREAM_CHUNKS_Y) |chunk_y| {
-                    for (0..STREAM_CHUNKS_XZ) |chunk_z| {
-                        try self.uploadChunkToTexture(
-                            chunk_x,
-                            chunk_y,
-                            chunk_z,
-                            world_cx,
-                            new_origin[1] + @as(i32, @intCast(chunk_y)),
-                            new_origin[2] + @as(i32, @intCast(chunk_z)),
-                        );
-                    }
-                }
-            } else if (dz == 1) {
-                const chunk_z = STREAM_CHUNKS_XZ - 1;
-                const world_cz = new_origin[2] + @as(i32, @intCast(chunk_z));
-                for (0..STREAM_CHUNKS_Y) |chunk_y| {
-                    for (0..STREAM_CHUNKS_XZ) |chunk_x| {
-                        try self.uploadChunkToTexture(
-                            chunk_x,
-                            chunk_y,
-                            chunk_z,
-                            new_origin[0] + @as(i32, @intCast(chunk_x)),
-                            new_origin[1] + @as(i32, @intCast(chunk_y)),
-                            world_cz,
-                        );
-                    }
-                }
-            } else if (dz == -1) {
-                const chunk_z: usize = 0;
-                const world_cz = new_origin[2];
-                for (0..STREAM_CHUNKS_Y) |chunk_y| {
-                    for (0..STREAM_CHUNKS_XZ) |chunk_x| {
-                        try self.uploadChunkToTexture(
-                            chunk_x,
-                            chunk_y,
-                            chunk_z,
-                            new_origin[0] + @as(i32, @intCast(chunk_x)),
-                            new_origin[1] + @as(i32, @intCast(chunk_y)),
-                            world_cz,
-                        );
-                    }
-                }
-            } else if (dy == 1) {
-                const chunk_y = STREAM_CHUNKS_Y - 1;
-                const world_cy = new_origin[1] + @as(i32, @intCast(chunk_y));
-                for (0..STREAM_CHUNKS_XZ) |chunk_z| {
-                    for (0..STREAM_CHUNKS_XZ) |chunk_x| {
-                        try self.uploadChunkToTexture(
-                            chunk_x,
-                            chunk_y,
-                            chunk_z,
-                            new_origin[0] + @as(i32, @intCast(chunk_x)),
-                            world_cy,
-                            new_origin[2] + @as(i32, @intCast(chunk_z)),
-                        );
-                    }
-                }
-            } else if (dy == -1) {
-                const chunk_y: usize = 0;
-                const world_cy = new_origin[1];
-                for (0..STREAM_CHUNKS_XZ) |chunk_z| {
-                    for (0..STREAM_CHUNKS_XZ) |chunk_x| {
-                        try self.uploadChunkToTexture(
-                            chunk_x,
-                            chunk_y,
-                            chunk_z,
-                            new_origin[0] + @as(i32, @intCast(chunk_x)),
-                            world_cy,
-                            new_origin[2] + @as(i32, @intCast(chunk_z)),
-                        );
-                    }
-                }
-            }
-
-            self.region_chunk_origin = new_origin;
-            self.gpu_region_origin = .{
-                new_origin[0] * chunk_size_i32,
-                new_origin[1] * chunk_size_i32,
-                new_origin[2] * chunk_size_i32,
-            };
-            self.gpu_dirty = false;
-        }
-
-        fn uploadChunk(self: *Self, chunk: *Chunk(T, 16, 16, 16)) !void {
-            var gpu_voxels = try self.allocator.alloc(u32, chunk.voxels.len);
-            defer self.allocator.free(gpu_voxels);
-
-            for (chunk.voxels, 0..) |v, i| {
-                gpu_voxels[i] = @as(u32, v);
-            }
-
-            try gl.bindBuffer(c.GL_SHADER_STORAGE_BUFFER, self.bitmap_ssbo);
-            try gl.bufferData(
-                c.GL_SHADER_STORAGE_BUFFER,
-                @intCast(chunk.occupancy.len * @sizeOf(u32)),
-                chunk.occupancy.ptr,
-                c.GL_DYNAMIC_DRAW,
-            );
-            try gl.bindBufferBase(c.GL_SHADER_STORAGE_BUFFER, 0, self.bitmap_ssbo);
-
-            try gl.bindBuffer(c.GL_SHADER_STORAGE_BUFFER, self.voxel_ssbo);
-            try gl.bufferData(
-                c.GL_SHADER_STORAGE_BUFFER,
-                @intCast(gpu_voxels.len * @sizeOf(u32)),
-                gpu_voxels.ptr,
-                c.GL_DYNAMIC_DRAW,
-            );
-            try gl.bindBufferBase(c.GL_SHADER_STORAGE_BUFFER, 1, self.voxel_ssbo);
-        }
+        //fn uploadEdgeForMove(self: *Self, old_origin: [3]i32, new_origin: [3]i32) !void {
+        //    const dx = new_origin[0] - old_origin[0];
+        //    const dy = new_origin[1] - old_origin[1];
+        //    const dz = new_origin[2] - old_origin[2];
+        //
+        //    const moved_axes =
+        //        @as(i32, if (dx != 0) 1 else 0) +
+        //        @as(i32, if (dy != 0) 1 else 0) +
+        //        @as(i32, if (dz != 0) 1 else 0);
+        //
+        //    if (moved_axes != 1) {
+        //        try self.uploadFullRegion(new_origin);
+        //        return;
+        //    }
+        //
+        //    if ((dx != 0 and @abs(dx) != 1) or (dy != 0 and @abs(dy) != 1) or (dz != 0 and @abs(dz) != 1)) {
+        //        try self.uploadFullRegion(new_origin);
+        //        return;
+        //    }
+        //
+        //    // This version keeps the old texture layout and overwrites the newly visible edge.
+        //    // It is not a full ring-buffer yet, so it is only safe as a "lighter step" when you
+        //    // also treat the texture logically as the new region after edge upload.
+        //    // If you see spatial mismatch while moving, switch this fallback to full rebuild.
+        //
+        //    if (dx == 1) {
+        //        const chunk_x = STREAM_CHUNKS_XZ - 1;
+        //        const world_cx = new_origin[0] + @as(i32, @intCast(chunk_x));
+        //        for (0..STREAM_CHUNKS_Y) |chunk_y| {
+        //            for (0..STREAM_CHUNKS_XZ) |chunk_z| {
+        //                try self.uploadChunkToTexture(
+        //                    chunk_x,
+        //                    chunk_y,
+        //                    chunk_z,
+        //                    world_cx,
+        //                    new_origin[1] + @as(i32, @intCast(chunk_y)),
+        //                    new_origin[2] + @as(i32, @intCast(chunk_z)),
+        //                );
+        //            }
+        //        }
+        //    } else if (dx == -1) {
+        //        const chunk_x: usize = 0;
+        //        const world_cx = new_origin[0];
+        //        for (0..STREAM_CHUNKS_Y) |chunk_y| {
+        //            for (0..STREAM_CHUNKS_XZ) |chunk_z| {
+        //                try self.uploadChunkToTexture(
+        //                    chunk_x,
+        //                    chunk_y,
+        //                    chunk_z,
+        //                    world_cx,
+        //                    new_origin[1] + @as(i32, @intCast(chunk_y)),
+        //                    new_origin[2] + @as(i32, @intCast(chunk_z)),
+        //                );
+        //            }
+        //        }
+        //    } else if (dz == 1) {
+        //        const chunk_z = STREAM_CHUNKS_XZ - 1;
+        //        const world_cz = new_origin[2] + @as(i32, @intCast(chunk_z));
+        //        for (0..STREAM_CHUNKS_Y) |chunk_y| {
+        //            for (0..STREAM_CHUNKS_XZ) |chunk_x| {
+        //                try self.uploadChunkToTexture(
+        //                    chunk_x,
+        //                    chunk_y,
+        //                    chunk_z,
+        //                    new_origin[0] + @as(i32, @intCast(chunk_x)),
+        //                    new_origin[1] + @as(i32, @intCast(chunk_y)),
+        //                    world_cz,
+        //                );
+        //            }
+        //        }
+        //    } else if (dz == -1) {
+        //        const chunk_z: usize = 0;
+        //        const world_cz = new_origin[2];
+        //        for (0..STREAM_CHUNKS_Y) |chunk_y| {
+        //            for (0..STREAM_CHUNKS_XZ) |chunk_x| {
+        //                try self.uploadChunkToTexture(
+        //                    chunk_x,
+        //                    chunk_y,
+        //                    chunk_z,
+        //                    new_origin[0] + @as(i32, @intCast(chunk_x)),
+        //                    new_origin[1] + @as(i32, @intCast(chunk_y)),
+        //                    world_cz,
+        //                );
+        //            }
+        //        }
+        //    } else if (dy == 1) {
+        //        const chunk_y = STREAM_CHUNKS_Y - 1;
+        //        const world_cy = new_origin[1] + @as(i32, @intCast(chunk_y));
+        //        for (0..STREAM_CHUNKS_XZ) |chunk_z| {
+        //            for (0..STREAM_CHUNKS_XZ) |chunk_x| {
+        //                try self.uploadChunkToTexture(
+        //                    chunk_x,
+        //                    chunk_y,
+        //                    chunk_z,
+        //                    new_origin[0] + @as(i32, @intCast(chunk_x)),
+        //                    world_cy,
+        //                    new_origin[2] + @as(i32, @intCast(chunk_z)),
+        //                );
+        //            }
+        //        }
+        //    } else if (dy == -1) {
+        //        const chunk_y: usize = 0;
+        //        const world_cy = new_origin[1];
+        //        for (0..STREAM_CHUNKS_XZ) |chunk_z| {
+        //            for (0..STREAM_CHUNKS_XZ) |chunk_x| {
+        //                try self.uploadChunkToTexture(
+        //                    chunk_x,
+        //                    chunk_y,
+        //                    chunk_z,
+        //                    new_origin[0] + @as(i32, @intCast(chunk_x)),
+        //                    world_cy,
+        //                    new_origin[2] + @as(i32, @intCast(chunk_z)),
+        //                );
+        //            }
+        //        }
+        //    }
+        //
+        //    self.region_chunk_origin = new_origin;
+        //    self.gpu_region_origin = .{
+        //        new_origin[0] * chunk_size_i32,
+        //        new_origin[1] * chunk_size_i32,
+        //        new_origin[2] * chunk_size_i32,
+        //    };
+        //    self.gpu_dirty = false;
+        //}
+        //
+        //fn uploadChunk(self: *Self, chunk: *Chunk(T, 16, 16, 16)) !void {
+        //    var gpu_voxels = try self.allocator.alloc(u32, chunk.voxels.len);
+        //    defer self.allocator.free(gpu_voxels);
+        //
+        //    for (chunk.voxels, 0..) |v, i| {
+        //        gpu_voxels[i] = @as(u32, v);
+        //    }
+        //
+        //    try gl.bindBuffer(c.GL_SHADER_STORAGE_BUFFER, self.bitmap_ssbo);
+        //    try gl.bufferData(
+        //        c.GL_SHADER_STORAGE_BUFFER,
+        //        @intCast(chunk.occupancy.len * @sizeOf(u32)),
+        //        chunk.occupancy.ptr,
+        //        c.GL_DYNAMIC_DRAW,
+        //    );
+        //    try gl.bindBufferBase(c.GL_SHADER_STORAGE_BUFFER, 0, self.bitmap_ssbo);
+        //
+        //    try gl.bindBuffer(c.GL_SHADER_STORAGE_BUFFER, self.voxel_ssbo);
+        //    try gl.bufferData(
+        //        c.GL_SHADER_STORAGE_BUFFER,
+        //        @intCast(gpu_voxels.len * @sizeOf(u32)),
+        //        gpu_voxels.ptr,
+        //        c.GL_DYNAMIC_DRAW,
+        //    );
+        //    try gl.bindBufferBase(c.GL_SHADER_STORAGE_BUFFER, 1, self.voxel_ssbo);
+        //}
 
         pub fn render(self: *Self, cam_pos: [3]f32) !void {
             //const cam_voxel = [3]i32{
