@@ -1,0 +1,7 @@
+const STREAM_CHUNKS_XZ = 48;
+const STREAM_CHUNKS_Y = 48;
+
+const BLOCK_VOXEL_CNT = 16;
+
+const CHUNK_BLOCK_CNT = 16;
+const CHUNK_VOXEL_CNT = 16;
