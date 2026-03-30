@@ -216,12 +216,12 @@ STBIWDEF void stbi_flip_vertically_on_write(int flip_boolean);
 #include <string.h>
 #include <math.h>
 
-#if defined(STBIW_MALLOC) && defined(STBIW_FREE) && (defined(STBIW_REALLOC) || defined(STBIW_REALLOC_SIZED))
+#if defined(STBIW_MALLOC) && defined(STBIW_FREE) && (defined(STBIW_REALLOC) || defined(STBIW_REALLOC_D))
 // ok
-#elif !defined(STBIW_MALLOC) && !defined(STBIW_FREE) && !defined(STBIW_REALLOC) && !defined(STBIW_REALLOC_SIZED)
+#elif !defined(STBIW_MALLOC) && !defined(STBIW_FREE) && !defined(STBIW_REALLOC) && !defined(STBIW_REALLOC_D)
 // ok
 #else
-#error "Must define all or none of STBIW_MALLOC, STBIW_FREE, and STBIW_REALLOC (or STBIW_REALLOC_SIZED)."
+#error "Must define all or none of STBIW_MALLOC, STBIW_FREE, and STBIW_REALLOC (or STBIW_REALLOC_D)."
 #endif
 
 #ifndef STBIW_MALLOC
@@ -230,8 +230,8 @@ STBIWDEF void stbi_flip_vertically_on_write(int flip_boolean);
 #define STBIW_FREE(p)           free(p)
 #endif
 
-#ifndef STBIW_REALLOC_SIZED
-#define STBIW_REALLOC_SIZED(p,oldsz,newsz) STBIW_REALLOC(p,newsz)
+#ifndef STBIW_REALLOC_D
+#define STBIW_REALLOC_D(p,oldsz,newsz) STBIW_REALLOC(p,newsz)
 #endif
 
 
@@ -826,7 +826,7 @@ STBIWDEF int stbi_write_hdr(char const *filename, int x, int y, int comp, const 
 static void *stbiw__sbgrowf(void **arr, int increment, int itemsize)
 {
    int m = *arr ? 2*stbiw__sbm(*arr)+increment : increment+1;
-   void *p = STBIW_REALLOC_SIZED(*arr ? stbiw__sbraw(*arr) : 0, *arr ? (stbiw__sbm(*arr)*itemsize + sizeof(int)*2) : 0, itemsize * m + sizeof(int)*2);
+   void *p = STBIW_REALLOC_D(*arr ? stbiw__sbraw(*arr) : 0, *arr ? (stbiw__sbm(*arr)*itemsize + sizeof(int)*2) : 0, itemsize * m + sizeof(int)*2);
    STBIW_ASSERT(p);
    if (p) {
       if (!*arr) ((int *) p)[1] = 0;
@@ -1654,7 +1654,7 @@ STBIWDEF int stbi_write_jpg(char const *filename, int x, int y, int comp, const 
       1.02 (2016-04-02)
              avoid allocating large structures on the stack
       1.01 (2016-01-16)
-             STBIW_REALLOC_SIZED: support allocators with no realloc support
+             STBIW_REALLOC_D: support allocators with no realloc support
              avoid race-condition in crc initialization
              minor compile issues
       1.00 (2015-09-14)
