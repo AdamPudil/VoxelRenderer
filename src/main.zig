@@ -2,9 +2,7 @@ const std = @import("std");
 const gl = @import("graphics/gl.zig");
 const gl_utils = @import("graphics/gl_utils.zig");
 const fps = @import("utils/FPScounter.zig");
-//const BlockChunk = @import("world/blockchunk.zig").BlockChunk;
 const World = @import("world/world.zig").World;
-//const zmath = @import("zmath");
 
 const c = @cImport({
     @cInclude("GL/glew.h");
@@ -14,12 +12,12 @@ const c = @cImport({
 const MOVE_SPEED: f32 = 1.0;
 const LOOK_SPEED: f32 = 0.002;
 
-const SIZE = 16;
+const CHUNK_BLOCK_CNT = 16;
 
-const res = [2]f32{ 1280, 720 };
+const res = [2]f32{ 1920, 1080 };
 
 const STREAM_CHUNKS_XZ = 32;
-const STREAM_CHUNKS_Y = 16;
+const STREAM_CHUNKS_Y = 32;
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -47,22 +45,11 @@ pub fn main() !void {
     var yaw: f32 = 3.14;
     var pitch: f32 = 0;
 
-    // ---- voxel data ----
-    var world = try World(u16, SIZE, STREAM_CHUNKS_XZ, STREAM_CHUNKS_Y).init(allocator);
+    // world
+    var world = try World(u16, CHUNK_BLOCK_CNT, STREAM_CHUNKS_XZ, STREAM_CHUNKS_Y).init(allocator);
     defer world.deinit() catch |err| {
         std.debug.print("{}", .{err});
     };
-
-    //  try world.generate(cam_pos);
-
-    //var tex: c_uint = 0;
-    //world.upload(&tex);
-
-    //gl.ActiveTexture(c.GL_TEXTURE0);
-    // c.glBindTexture(c.GL_TEXTURE_3D, tex);
-
-    //c.glTexParameteri(c.GL_TEXTURE_3D, c.GL_TEXTURE_MIN_FILTER, c.GL_NEAREST);
-    //c.glTexParameteri(c.GL_TEXTURE_3D, c.GL_TEXTURE_MAG_FILTER, c.GL_NEAREST);
 
     // uniforms
     const resLoc = gl.getUniformLocation(program, "uResolution");
@@ -83,7 +70,7 @@ pub fn main() !void {
     gl.useProgram(program);
 
     while (c.glfwWindowShouldClose(window) == 0) {
-        // precalsulate mouse
+        // precalculations
         var x: f64 = 0;
         var y: f64 = 0;
         c.glfwGetCursorPos(window, &x, &y);
@@ -185,13 +172,9 @@ pub fn main() !void {
         c.glfwSwapBuffers(window);
 
         if (c.glfwGetKey(window, c.GLFW_KEY_F2) == c.GLFW_PRESS) {
-            gl_utils.saveScreenshot(1280, 720) catch {};
+            gl_utils.saveScreenshot(res[0], res[1]) catch {};
         }
 
         c.glfwPollEvents();
     }
 }
-
-// add this to main.zig (below utils or anywhere above main use)
-
-// call this when F2 pressed
