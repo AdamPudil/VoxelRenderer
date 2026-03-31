@@ -68,3 +68,16 @@ pub fn hashFloat01(x: i32, y: i32, z: i32) f32 {
     const h = chunkHash3(x, y, z);
     return @as(f32, @floatFromInt(h & 0x00ffffff)) / 16777215.0;
 }
+
+
+pub fn clamp01(x: f32) f32 {
+    if (x < 0.0) return 0.0;
+    if (x > 1.0) return 1.0;
+    return x;
+}
+
+pub fn rand01(x: i32, y: i32, z: i32, salt: u32) f32 {
+    var h = chunkHash3(x, y, z) ^ salt;
+    h = mix32(h);
+    return @as(f32, @floatFromInt(h & 0x00ffffff)) / 16777215.0;
+}

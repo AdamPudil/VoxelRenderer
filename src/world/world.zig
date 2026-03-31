@@ -122,28 +122,19 @@ pub fn World(
         fn terrainHeight(wx: i32, wz: i32) i32 {
             const x = @as(f32, @floatFromInt(wx));
             const z = @as(f32, @floatFromInt(wz));
+            return @as(i32, @intFromFloat(@floor(noise.terrainBaseHeight(x, z))));
+        }
 
-            var sum: f32 = 0.0;
-            var amp: f32 = 1.0;
-            var freq: f32 = 0.02;
-            var norm: f32 = 0.0;
+        fn terrainDensity(wx: i32, wy: i32, wz: i32) f32 {
+            return noise3d.terrainDensity(
+                @as(f32, @floatFromInt(wx)),
+                @as(f32, @floatFromInt(wy)),
+                @as(f32, @floatFromInt(wz)),
+            );
+        }
 
-            for (0..4) |_| {
-                const n01 = noise.noise2D(x * freq, z * freq); // 0..1
-                const n = n01 * 2.0 - 1.0; // -1..1
-                sum += n * amp;
-                norm += amp;
-                amp *= 0.5;
-                freq *= 2.0;
-            }
-
-            sum /= norm;
-
-            //const base_height: f32 = 20.0;
-            //const height_scale: f32 = 8.0;
-
-            //return @as(i32, @intFromFloat(@round(base_height + sum * height_scale)));
-            return 20 + @divFloor(wx, 8);
+        fn terrainVoxelId(wx: i32, wy: i32, wz: i32) T {
+            return @as(T, @intCast(noise3d.terrainMaterial(wx, wy, wz)));
         }
 
         const GenMode = enum {
@@ -156,6 +147,7 @@ pub fn World(
             voronoi_border_repeat,
             voronoi_border_world,
             voronoi_edges_world,
+            terrain_world,
         };
 
         fn fillFractalChunk(
@@ -171,6 +163,42 @@ pub fn World(
             //if ((h & 3) == 0) return;
 
             const size_i32: i32 = @intCast(CHUNK_SIZE);
+
+            if (mode == GenMode.terrain_world) {
+                for (0..CHUNK_SIZE) |lz| {
+                    for (0..CHUNK_SIZE) |ly| {
+                        for (0..CHUNK_SIZE) |lx| {
+                            const lx_i: i32 = @intCast(lx);
+                            const ly_i: i32 = @intCast(ly);
+                            const lz_i: i32 = @intCast(lz);
+
+                            const wx = cx * size_i32 + lx_i;
+                            const wy = cy * size_i32 + ly_i;
+                            const wz = cz * size_i32 + lz_i;
+
+                            const surface_y = noise3d.terrainBaseHeight(wx, wz);
+                            if (wy > surface_y) continue;
+
+                            const slope = noise3d.terrainSlope(wx, wz);
+                            const depth = surface_y - wy;
+
+                            var voxel: T = 1; // dirt
+
+                            if (depth == 0) {
+                                voxel = if (slope <= 2) 2 else 3; // grass on flatter tops, stone on steep tops
+                            } else if (depth <= 3) {
+                                voxel = if (slope <= 3) 1 else 3; // thin dirt layer unless steep
+                            } else {
+                                voxel = 3; // deeper stone
+                            }
+
+                            chunk.setVoxel(lx, ly, lz, voxel);
+                        }
+                    }
+                }
+
+                return;
+            }
 
             for (0..CHUNK_SIZE) |lz| {
                 for (0..CHUNK_SIZE) |ly| {
@@ -236,10 +264,14 @@ pub fn World(
                                 wy,
                                 wz,
                             ),
+                            else => false,
                         };
 
                         if (solid) {
-                            chunk.setVoxel(lx, ly, lz, @as(T, 1));
+                            const voxel_id: T = switch (mode) {
+                                else => @as(T, 1),
+                            };
+                            chunk.setVoxel(lx, ly, lz, voxel_id);
                         }
                     }
                 }
@@ -253,7 +285,7 @@ pub fn World(
                 var chunk = try Chunk(T, 16, 16, 16).init(self.allocator);
                 chunk.fill(@as(T, 0));
 
-                fillFractalChunk(&chunk, cx, cy, cz, GenMode.menger_world);
+                fillFractalChunk(&chunk, cx, cy, cz, GenMode.terrain_world);
 
                 return chunk;
             } else {
