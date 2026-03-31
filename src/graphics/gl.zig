@@ -43,6 +43,11 @@ pub fn getShaderInfoLog(
     c.__glewGetShaderInfoLog.?(shader, bufSize, length, infoLog);
 }
 
+pub fn deleteShader(shader: c_uint) void {
+    const f = c.__glewDeleteShader orelse return;
+    f(shader);
+}
+
 // Program
 
 pub fn createProgram() c_uint {
@@ -55,6 +60,11 @@ pub fn linkProgram(p: c_uint) void {
 
 pub fn useProgram(p: c_uint) void {
     c.__glewUseProgram.?(p);
+}
+
+pub fn deleteProgram(program: c_uint) void {
+    const f = c.__glewDeleteProgram orelse return;
+    f(program);
 }
 
 pub fn getProgramiv(

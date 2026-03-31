@@ -14,7 +14,7 @@ const LOOK_SPEED: f32 = 0.002;
 
 const CHUNK_BLOCK_CNT = 16;
 
-const res = [2]f32{ 1920, 1080 };
+const res = [2]f32{ 640, 480 };
 
 const STREAM_CHUNKS_XZ = 32;
 const STREAM_CHUNKS_Y = 32;
@@ -36,8 +36,7 @@ pub fn main() !void {
     gl.bindVertexArray(vao);
 
     // load shaders
-    const program = try gl_utils.createProgram("src/graphics/voxel.vs", "src/graphics/voxel.fs");
-
+    const program = try gl_utils.createProgram("src/graphics/shaders/voxel");
     std.debug.print("program = {}\n", .{program});
 
     // camera
