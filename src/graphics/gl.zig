@@ -155,6 +155,16 @@ pub fn bufferData(
     f(target, size, data, usage);
 }
 
+pub fn bufferSubData(
+    target: c.GLenum,
+    offset: c.GLintptr,
+    size: c.GLsizeiptr,
+    data: ?*const anyopaque,
+) Error!void {
+    const f = c.__glewBufferSubData orelse return Error.MissingOpenGLFunction;
+    f(target, offset, size, data);
+}
+
 pub fn genBuffers(n: c.GLsizei, buffers: *c.GLuint) Error!void {
     const f = c.__glewGenBuffers orelse return Error.MissingOpenGLFunction;
     f(n, buffers);

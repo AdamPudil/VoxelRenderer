@@ -2,3 +2,4 @@
 zig-out/
 *.patch
 *.tar.gz
+fps_log.txt

@@ -318,4 +318,6 @@ pub fn saveScreenshot(width: i32, height: i32) !void {
         buffer.ptr,
         width * 3,
     );
+
+    std.debug.print("Screenshot taken, path: {s}", .{path});
 }

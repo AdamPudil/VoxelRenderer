@@ -1,63 +1,55 @@
-#version 340
+#version 420 core
+#include "include/constants.glsl"
+#include "include/frag_math.glsl"
+#include "include/frag_traverse.glsl"
+#include "include/frag_shade.glsl"
+#include "include/world_functions.glsl"
 
 in vec2 uv;
 out vec4 fragColor;
 
-//uniform usampler3D voxels;
-uniform vec3 camPos;
-uniform vec3 camDir;
-uniform vec2 res;
-uniform ivec3 worldOrigin;
-//uniform ivec3 streamedSize;
+uniform vec2 uResolution;
+uniform vec3 uCamPos;
+uniform vec3 uCamDir;
 
-const int renderDistance = 256;
-const vec4 skyColor = vec4(0.4, 0.1, 0.1, 1.0);
-const vec3 baseColor = vec3(0.376, 0.239, 0.114);
+// region origin in chunk coordinates, not voxel coordinates
+uniform ivec3 uRegionOriginChunk;
+uniform ivec3 uRegionSizeChunks;
 
-layout(std430, binding = 0) readonly buffer VoxelBitmap {
-    uint bitmap[];
-};
+// one uint per slot: 0 = inactive, nonzero = active
+uniform usamplerBuffer uChunkActiveTex;
 
-layout(std430, binding = 1) readonly buffer Voxels {
-    uint voxels[];
-};
+// packed bitmap data for all slots
+uniform usamplerBuffer uBitmapTex;
 
-vec3 getRay(vec2 uv) {
-    float aspect = res.x / res.y;
-    vec2 p = uv * 2.0 - 1.0;
-    p.x *= aspect;
-
-    vec3 right = normalize(cross(camDir, vec3(0.0, 1.0, 0.0)));
-    vec3 up = normalize(cross(right, camDir));
-
-    return normalize(camDir + p.x * right + p.y * up);
-}
-
-bool voxelAt(ivec3 p) {
-    if (p.x < 0 || p.y < 0 || p.z < 0 ||
-        p.x >= streamedSize.x ||
-        p.y >= streamedSize.y ||
-        p.z >= streamedSize.z) return false;
-
-    return texelFetch(voxels, p, 0).r > 0u;
-}
+// voxel ids for all slots
+uniform usamplerBuffer uVoxelTex;
 
 void main() {
-    vec3 dir = getRay(uv);
-    vec3 pos = camPos - vec3(worldOrigin);
+    vec3 dir = getRay(gl_FragCoord.xy);
+    vec3 pos = uCamPos;
 
     ivec3 v = ivec3(floor(pos));
 
     vec3 stepDir = sign(dir);
-    vec3 tDelta = abs(1.0 / dir);
 
+    vec3 safeDir = vec3(
+        abs(dir.x) < 0.0001 ? (dir.x < 0.0 ? -0.0001 : 0.0001) : dir.x,
+        abs(dir.y) < 0.0001 ? (dir.y < 0.0 ? -0.0001 : 0.0001) : dir.y,
+        abs(dir.z) < 0.0001 ? (dir.z < 0.0 ? -0.0001 : 0.0001) : dir.z
+    );
+
+    vec3 tDelta = abs(1.0 / safeDir);
     vec3 next = floor(pos) + stepDir * 0.5 + 0.5;
-    vec3 tMax = (next - pos) / dir;
+    vec3 tMax = (next - pos) / safeDir;
 
     vec3 normal = vec3(0.0);
 
     for (int i = 0; i < renderDistance; i++) {
-        if (voxelAt(v)) {
+        uint id = voxelAtWorld(v);
+        if (id != 0u) {
+            vec3 baseColor = voxelColor(id);
+
             vec3 lightDir = normalize(vec3(1.0, 1.0, 0.8));
             float diff = max(dot(normalize(normal), lightDir), 0.0);
             float light = 0.3 + diff * 0.7;
@@ -84,7 +76,6 @@ void main() {
             tMax.z += tDelta.z;
             normal = vec3(0.0, 0.0, -stepDir.z);
         }
-        if(!inBounds(v)) break;
     }
 
     fragColor = skyColor;

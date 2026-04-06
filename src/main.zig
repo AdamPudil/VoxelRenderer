@@ -3,6 +3,7 @@ const gl = @import("graphics/gl.zig");
 const gl_utils = @import("graphics/gl_utils.zig");
 const fps = @import("utils/FPScounter.zig");
 const World = @import("world/world.zig").World;
+const wc = @import("world/worldConstants.zig");
 
 const c = @cImport({
     @cInclude("GL/glew.h");
@@ -16,8 +17,8 @@ const CHUNK_BLOCK_CNT = 16;
 
 const res = [2]f32{ 640, 480 };
 
-const STREAM_CHUNKS_XZ = 32;
-const STREAM_CHUNKS_Y = 32;
+const STREAM_CHUNKS_XZ = wc.STREAM_CHUNKS_XZ;
+const STREAM_CHUNKS_Y = wc.STREAM_CHUNKS_Y;
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -40,15 +41,17 @@ pub fn main() !void {
     std.debug.print("program = {}\n", .{program});
 
     // camera
-    var cam_pos = [3]f32{ 0, 70, 0 };
+    var cam_pos = [3]f32{ 100, 30, 100 };
     var yaw: f32 = 3.14;
     var pitch: f32 = 0;
 
     // world
-    var world = try World(u16, CHUNK_BLOCK_CNT, STREAM_CHUNKS_XZ, STREAM_CHUNKS_Y).init(allocator);
+    var world = try World.init(allocator);
     defer world.deinit() catch |err| {
         std.debug.print("{}", .{err});
     };
+    try world.startGenerator();
+    //try world.enqueueInitialArea();
 
     // uniforms
     const resLoc = gl.getUniformLocation(program, "uResolution");
@@ -57,9 +60,12 @@ pub fn main() !void {
     const regionOriginLoc = gl.getUniformLocation(program, "uRegionOriginChunk");
     const regionSizeLoc = gl.getUniformLocation(program, "uRegionSizeChunks");
 
-    const activeTexLoc = gl.getUniformLocation(program, "uChunkActiveTex");
+    const chunkHeaderTexLoc = gl.getUniformLocation(program, "uChunkHeaderTex");
+    const blockHeaderTexLoc = gl.getUniformLocation(program, "uBlockHeaderTex");
+    const voxelBlockHeaderTexLoc = gl.getUniformLocation(program, "uVoxelBlockHeaderTex");
     const bitmapTexLoc = gl.getUniformLocation(program, "uBitmapTex");
-    const voxelTexLoc = gl.getUniformLocation(program, "uVoxelTex");
+    const paletteTexLoc = gl.getUniformLocation(program, "uPaletteTex");
+    const indexTexLoc = gl.getUniformLocation(program, "uIndexTex");
 
     c.glfwSetInputMode(window, c.GLFW_CURSOR, c.GLFW_CURSOR_DISABLED);
 
@@ -132,14 +138,16 @@ pub fn main() !void {
 
         c.glClear(c.GL_COLOR_BUFFER_BIT);
 
-        gl.uniform1i(activeTexLoc, 0);
-        gl.uniform1i(bitmapTexLoc, 1);
-        gl.uniform1i(voxelTexLoc, 2);
+        gl.uniform1i(chunkHeaderTexLoc, 0);
+        gl.uniform1i(blockHeaderTexLoc, 1);
+        gl.uniform1i(voxelBlockHeaderTexLoc, 2);
+        gl.uniform1i(bitmapTexLoc, 3);
+        gl.uniform1i(paletteTexLoc, 4);
+        gl.uniform1i(indexTexLoc, 5);
 
         // render / prepare streamed texture
         try world.render(cam_pos);
-
-        try world.bindGpuTextures();
+        world.bindGpuTextures();
 
         // uniforms
         try gl.uniform2f(
