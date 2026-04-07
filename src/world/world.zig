@@ -379,18 +379,18 @@ pub const World = struct {
     }
 
     fn generateChunkStatic(
-        allocator: std.mem.Allocator,
+        _: std.mem.Allocator,
         cx: i32,
         cy: i32,
         cz: i32,
     ) !Chunk {
-        const dark_dray: Voxel = Voxel.rgb(49, 49, 56);
-        const dray: Voxel = Voxel.rgb(98, 98, 112);
-        const blue = Voxel.rgb(50, 90, 220);
+        const dark_gray: Voxel = Voxel.rgb(49, 49, 56);
+        const light_gray: Voxel = Voxel.rgb(196, 196, 224);
+        const gray: Voxel = Voxel.rgb(98, 98, 112);
+        //const blue = Voxel.rgb(50, 90, 220);
 
         const floor_half_extent: i32 = 4;
         const wall_height_chunks: i32 = 3;
-        const pillar_radius_chunks: f32 = 3.0;
 
         const inside_floor =
             cx >= -floor_half_extent and cx <= floor_half_extent and
@@ -399,120 +399,18 @@ pub const World = struct {
         const outside_floor = !inside_floor;
 
         if (inside_floor and cy == -1) {
-            return Chunk.initMono(0, dark_dray);
+            if (@mod(cx, 2) == @mod(cz, 2)) {
+                return Chunk.initMono(0, light_gray);
+            } else {
+                return Chunk.initMono(0, dark_gray);
+            }
         }
 
         if (outside_floor and cy >= -1 and cy < (-1 + wall_height_chunks)) {
-            return Chunk.initMono(0, dray);
+            return Chunk.initMono(0, gray);
         }
 
-        var hit_pillar = false;
-        var pillar_center_x: f32 = 0;
-        var pillar_center_z: f32 = 0;
-
-        var i: usize = 0;
-        while (i < 8) : (i += 1) {
-            const angle = (2.0 * std.math.pi * @as(f32, @floatFromInt(i))) / 8.0;
-            const pcx = std.math.cos(angle) * pillar_radius_chunks * @as(f32, @floatFromInt(CHUNK_SIDE_VOXELS));
-            const pcz = std.math.sin(angle) * pillar_radius_chunks * @as(f32, @floatFromInt(CHUNK_SIDE_VOXELS));
-
-            const min_x = @as(f32, @floatFromInt(cx * @as(i32, @intCast(CHUNK_SIDE_VOXELS))));
-            const min_z = @as(f32, @floatFromInt(cz * @as(i32, @intCast(CHUNK_SIDE_VOXELS))));
-            const max_x = min_x + @as(f32, @floatFromInt(CHUNK_SIDE_VOXELS));
-            const max_z = min_z + @as(f32, @floatFromInt(CHUNK_SIDE_VOXELS));
-
-            const margin = @as(f32, @floatFromInt(BLOCK_VOXEL_CNT * 2));
-
-            if (pcx >= min_x - margin and pcx < max_x + margin and
-                pcz >= min_z - margin and pcz < max_z + margin)
-            {
-                hit_pillar = true;
-                pillar_center_x = pcx;
-                pillar_center_z = pcz;
-                break;
-            }
-        }
-
-        if (!hit_pillar) {
-            return Chunk.initFree(0);
-        }
-
-        var chunk = try Chunk.initBlock(allocator, 0);
-        const block_chunk = chunk.getBlockChunk().?;
-
-        const chunk_base_x = cx * @as(i32, @intCast(CHUNK_SIDE_VOXELS));
-        const chunk_base_y = cy * @as(i32, @intCast(CHUNK_SIDE_VOXELS));
-        const chunk_base_z = cz * @as(i32, @intCast(CHUNK_SIDE_VOXELS));
-
-        const pillar_radius_vox: f32 = @as(f32, @floatFromInt(BLOCK_VOXEL_CNT)) * 0.9;
-        const pillar_min_y: i32 = -@as(i32, @intCast(CHUNK_SIDE_VOXELS));
-        const pillar_max_y: i32 = @as(i32, @intCast(CHUNK_SIDE_VOXELS)) * 2;
-
-        var bz: usize = 0;
-        while (bz < CHUNK_BLOCK_CNT) : (bz += 1) {
-            var by: usize = 0;
-            while (by < CHUNK_BLOCK_CNT) : (by += 1) {
-                var bx: usize = 0;
-                while (bx < CHUNK_BLOCK_CNT) : (bx += 1) {
-                    const wx0 = chunk_base_x + @as(i32, @intCast(bx * BLOCK_VOXEL_CNT));
-                    const wy0 = chunk_base_y + @as(i32, @intCast(by * BLOCK_VOXEL_CNT));
-                    const wz0 = chunk_base_z + @as(i32, @intCast(bz * BLOCK_VOXEL_CNT));
-
-                    const wxc = @as(f32, @floatFromInt(wx0 + @divFloor(@as(i32, @intCast(BLOCK_VOXEL_CNT)), 2)));
-                    const wzc = @as(f32, @floatFromInt(wz0 + @divFloor(@as(i32, @intCast(BLOCK_VOXEL_CNT)), 2)));
-
-                    const dx = wxc - pillar_center_x;
-                    const dz = wzc - pillar_center_z;
-                    const d2 = dx * dx + dz * dz;
-
-                    const max_r = pillar_radius_vox + @as(f32, @floatFromInt(BLOCK_VOXEL_CNT)) * 0.9;
-                    if (d2 > max_r * max_r) continue;
-
-                    if (wy0 >= pillar_max_y or wy0 + @as(i32, @intCast(BLOCK_VOXEL_CNT)) <= pillar_min_y) continue;
-
-                    var block = try Block.initVoxel(allocator, 3);
-                    const vb = block.getVoxelBlock().?;
-
-                    var lz: usize = 0;
-                    while (lz < BLOCK_VOXEL_CNT) : (lz += 1) {
-                        var ly: usize = 0;
-                        while (ly < BLOCK_VOXEL_CNT) : (ly += 1) {
-                            var lx: usize = 0;
-                            while (lx < BLOCK_VOXEL_CNT) : (lx += 1) {
-                                const wx = wx0 + @as(i32, @intCast(lx));
-                                const wy = wy0 + @as(i32, @intCast(ly));
-                                const wz = wz0 + @as(i32, @intCast(lz));
-
-                                if (wy < pillar_min_y or wy >= pillar_max_y) continue;
-
-                                const fdx = @as(f32, @floatFromInt(wx)) - pillar_center_x;
-                                const fdz = @as(f32, @floatFromInt(wz)) - pillar_center_z;
-
-                                if (fdx * fdx + fdz * fdz <= pillar_radius_vox * pillar_radius_vox) {
-                                    setVoxelInVoxelBlock(vb, lx, ly, lz, blue, 0);
-                                }
-                            }
-                        }
-                    }
-
-                    if (vb.solid_count == 0) {
-                        block.deinit(allocator);
-                        continue;
-                    }
-
-                    block_chunk.blocks[bz][by][bx] = block;
-                    block_chunk.solid_count += 1;
-                    block_chunk.dirty = true;
-                }
-            }
-        }
-
-        if (block_chunk.solid_count == 0) {
-            chunk.deinit(allocator);
-            return Chunk.initFree(0);
-        }
-
-        return chunk;
+        return Chunk.initFree(0);
     }
 
     // voxel fill helper
@@ -724,7 +622,7 @@ pub const World = struct {
             c.GL_DYNAMIC_DRAW,
         );
         gl.bindTexture(c.GL_TEXTURE_BUFFER, tex);
-        try gl.texBuffer(c.GL_TEXTURE_BUFFER, c.GL_RGBA32UI, buf);
+        try gl.texBuffer(c.GL_TEXTURE_BUFFER, c.GL_R32UI, buf);
     }
 
     // render

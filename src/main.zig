@@ -15,7 +15,7 @@ const LOOK_SPEED: f32 = 0.002;
 
 const CHUNK_BLOCK_CNT = 16;
 
-const res = [2]f32{ 640, 480 };
+const res = [2]f32{ 1920, 1080 };
 
 const STREAM_CHUNKS_XZ = wc.STREAM_CHUNKS_XZ;
 const STREAM_CHUNKS_Y = wc.STREAM_CHUNKS_Y;
