@@ -36,28 +36,28 @@ pub const Voxel = packed struct(u64) {
         };
     }
 
+    pub fn getVoxel(
+        r: u8,
+        g: u8,
+        b: u8,
+        transparency: u8,
+        opacity: u8,
+        reflectiveness: u8,
+        luminescence: u8,
+    ) Voxel {
+        return .{
+            .r = r,
+            .g = g,
+            .b = b,
+            .transparency = transparency,
+            .opacity = opacity,
+            .reflectiveness = reflectiveness,
+            .luminescence = luminescence,
+            .padding = 0,
+        };
+    }
+
     pub fn isEmpty(self: Voxel) bool {
         return self.opacity == 0;
     }
 };
-
-pub fn makeVoxel(
-    r: u8,
-    g: u8,
-    b: u8,
-    transparency: u8,
-    opacity: u8,
-    reflectiveness: u8,
-    luminescence: u8,
-) Voxel {
-    return .{
-        .r = r,
-        .g = g,
-        .b = b,
-        .transparency = transparency,
-        .opacity = opacity,
-        .reflectiveness = reflectiveness,
-        .luminescence = luminescence,
-        .padding = 0,
-    };
-}

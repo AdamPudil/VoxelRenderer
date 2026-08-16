@@ -398,14 +398,16 @@ pub const World = struct {
 
         const outside_floor = !inside_floor;
 
+        // chunk
         if (inside_floor and cy == -1) {
-            if (@mod(cx, 2) == @mod(cz, 2)) {
+            if (@mod(@abs(cx), 2) == @mod(@abs(cz), 2)) {
                 return Chunk.initMono(0, light_gray);
             } else {
                 return Chunk.initMono(0, dark_gray);
             }
         }
 
+        // wall
         if (outside_floor and cy >= -1 and cy < (-1 + wall_height_chunks)) {
             return Chunk.initMono(0, gray);
         }
