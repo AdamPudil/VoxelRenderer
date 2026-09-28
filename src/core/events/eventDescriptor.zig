@@ -1,12 +1,27 @@
-pub const EventQueueOnFull = struct {
-    TO_NEXT_FRAME: bool = false,
-    TO_DEBT_QUEUE: bool = false,
-    OVERRIDE_LAST: bool = false,
-    OVERRIDE_FIRST: bool = false,
-    LOSE_MESSAGE: bool = false,
+pub const QueueFullAction = enum {
+    debt_queue,
+    override_newest,
+    override_oldest,
+    discard,
+};
 
-    ONLY_WARN: bool = false,
-    SILENCED: bool = false,
+pub const EventQueueOnFull = struct {
+    action: QueueFullAction = .debt_queue,
+    warn: bool = true,
+};
+
+/// The execution context that exclusively consumes an event-type queue.
+/// Multiple event types may belong to the same consumer.
+pub const EventConsumer = enum {
+    event_loop,
+    render,
+    entity,
+    world,
+    physics,
+    audio,
+    UI,
+    input,
+    inventory,
 };
 
 pub const EventTypeDescriptor = struct {
@@ -14,6 +29,8 @@ pub const EventTypeDescriptor = struct {
     prio: u8,
 
     name: []const u8,
+
+    consumer: EventConsumer = .event_loop,
 
     queueMsgSize: u64,
     onFull: EventQueueOnFull,

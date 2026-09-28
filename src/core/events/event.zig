@@ -17,13 +17,119 @@ pub const eventInfo = struct {
     name: []const u8,
 };
 
-fn genEventType(comptime typeDesc: typeDescriptor, comptime eventDesc: []const eventDescriptor) type {
+pub fn eventToString(value: anytype, buffer: []u8) ![]const u8 {
+    const Event = @TypeOf(value);
+    const union_info = switch (@typeInfo(Event)) {
+        .@"union" => |info| info,
+        else => @compileError("eventToString expects a tagged union"),
+    };
+    if (union_info.tag_type == null) {
+        @compileError("eventToString expects a tagged union");
+    }
+
+    var stream = std.io.fixedBufferStream(buffer);
+    const writer = stream.writer();
+    const active_tag = std.meta.activeTag(value);
+
+    inline for (union_info.fields) |field| {
+        if (active_tag == @field(union_info.tag_type.?, field.name)) {
+            try writer.print("{s}(", .{field.name});
+
+            const payload = @field(value, field.name);
+            switch (@typeInfo(field.type)) {
+                .void => {},
+                .@"struct" => |struct_info| {
+                    inline for (struct_info.fields, 0..) |payload_field, i| {
+                        if (i != 0) try writer.writeAll(", ");
+                        try writer.print(
+                            "{s}={any}",
+                            .{ payload_field.name, @field(payload, payload_field.name) },
+                        );
+                    }
+                },
+                else => try writer.print("data={any}", .{payload}),
+            }
+
+            try writer.writeByte(')');
+            return stream.getWritten();
+        }
+    }
+
+    unreachable;
+}
+
+pub fn validateEventTypeDescriptor(comptime typeDesc: typeDescriptor) void {
+    if (typeDesc.events.len == 0) {
+        @compileError(std.fmt.comptimePrint(
+            "event type '{s}' must define at least one event",
+            .{typeDesc.name},
+        ));
+    }
+
+    for (typeDesc.events, 0..) |event_a, i| {
+        for (typeDesc.events[i + 1 ..]) |event_b| {
+            if (event_a.id == event_b.id) {
+                @compileError(std.fmt.comptimePrint(
+                    "duplicate event id {d} in event type '{s}'",
+                    .{ event_a.id, typeDesc.name },
+                ));
+            }
+
+            if (std.mem.eql(u8, event_a.name, event_b.name)) {
+                @compileError(std.fmt.comptimePrint(
+                    "duplicate event name '{s}' in event type '{s}'",
+                    .{ event_a.name, typeDesc.name },
+                ));
+            }
+        }
+    }
+}
+
+fn genEventUnion(comptime eventDesc: []const eventDescriptor) type {
+    var tag_fields: [eventDesc.len]std.builtin.Type.EnumField = undefined;
+    var union_fields: [eventDesc.len]std.builtin.Type.UnionField = undefined;
+
+    for (eventDesc, 0..) |descriptor, i| {
+        tag_fields[i] = .{
+            .name = descriptor.name ++ "",
+            .value = descriptor.id,
+        };
+        union_fields[i] = .{
+            .name = descriptor.name ++ "",
+            .type = descriptor.dataType,
+            .alignment = @alignOf(descriptor.dataType),
+        };
+    }
+
+    const Tag = @Type(.{ .@"enum" = .{
+        .tag_type = u32,
+        .fields = &tag_fields,
+        .decls = &.{},
+        .is_exhaustive = true,
+    } });
+
+    return @Type(.{ .@"union" = .{
+        .layout = .auto,
+        .tag_type = Tag,
+        .fields = &union_fields,
+        .decls = &.{},
+    } });
+}
+
+pub fn genEventType(comptime typeDesc: typeDescriptor, comptime eventDesc: []const eventDescriptor) type {
+    validateEventTypeDescriptor(typeDesc);
+
     const type_id = typeDesc.id;
 
     return struct {
         pub const id: u16 = type_id;
         pub const prio: u8 = typeDesc.prio;
         pub const name: []const u8 = typeDesc.name;
+        pub const Event = genEventUnion(eventDesc);
+
+        pub fn toString(value: Event, buffer: []u8) ![]const u8 {
+            return eventToString(value, buffer);
+        }
 
         pub const events: [eventDesc.len]type = blk: {
             var result: [eventDesc.len]type = undefined;
@@ -71,14 +177,8 @@ test "genEventType generates correct type and events" {
 
             .queueMsgSize = 128,
             .onFull = .{
-                .TO_NEXT_FRAME = true,
-                .TO_DEBT_QUEUE = false,
-                .OVERRIDE_LAST = false,
-                .OVERRIDE_FIRST = false,
-                .LOSE_MESSAGE = false,
-
-                .ONLY_WARN = false,
-                .SILENCED = false,
+                .action = .debt_queue,
+                .warn = false,
             },
             .events = &[_]eventDescriptor{
                 .{
