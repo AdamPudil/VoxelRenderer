@@ -17,7 +17,7 @@ const startup_message =
     "                       |   \x1b[32mGame started\x1b[0m   |\n" ++
     "                       +------------------+\n\n";
 
-pub var logger: Logging = undefined;
+pub var logger: Logging = .{};
 
 pub fn getTimestamp(buf: []u8) ![]const u8 {
     const raw = c.time(null);
@@ -34,11 +34,16 @@ pub const Logging = struct {
     file: std.fs.File.Writer = undefined,
     stage: format.ProductionStage = undefined,
     table: table.TableState = .{},
+    initialized: bool = false,
 
     const TIME_COLUMN_WIDTH: usize = 20;
     const TAG_COLUMN_WIDTH: usize = 9;
 
     pub fn init(self: *Logging, stage: format.ProductionStage) void {
+        // Several test modules share the global logger. Reinitializing it
+        // would truncate test.log and erase output written by earlier tests.
+        if (self.initialized) return;
+
         self.stage = stage;
 
         const cwd = std.fs.cwd();
@@ -65,6 +70,7 @@ pub const Logging = struct {
         }
 
         self.file = fil.writer();
+        self.initialized = true;
 
         std.time.sleep(1_000_000);
 
@@ -82,35 +88,59 @@ pub const Logging = struct {
         const outDesc = format.output_descriptors.get(messType);
         const normalDesc = format.output_descriptors.get(.NORMAL);
 
-        const fullFmt =
-            "[{s}] {s}{s} {s}" ++ fmt ++ "\n";
-
         var buffer: [32]u8 = undefined;
         const timestamp = getTimestamp(&buffer) catch "[TIME ERROR]";
 
-        const fullArgs =
+        var message_buffer: [8192]u8 = undefined;
+        const message = std.fmt.bufPrint(&message_buffer, fmt, args) catch {
+            self.printLine(.ERROR, "logging message exceeded 8192 bytes");
+            return;
+        };
+        const trimmed_message = std.mem.trimRight(u8, message, "\n");
+
+        var lines = std.mem.splitScalar(u8, trimmed_message, '\n');
+        var line_index: usize = 0;
+        while (lines.next()) |line| : (line_index += 1) {
+            if (line_index == 0) {
+                self.printBoth(
+                    "[{s}] {s}{s} {s}{s}\n",
+                    .{
+                        timestamp,
+                        format.color_codes.get(outDesc.color),
+                        outDesc.label,
+                        format.color_codes.get(normalDesc.color),
+                        line,
+                    },
+                );
+            } else {
+                // Replace "[YYYY-MM-DD HH:MM:SS] " with equal-width padding,
+                // while keeping the original severity tag on every line.
+                self.printBoth(
+                    "{s: >22}{s}{s} {s}{s}\n",
+                    .{
+                        "",
+                        format.color_codes.get(outDesc.color),
+                        outDesc.label,
+                        format.color_codes.get(normalDesc.color),
+                        line,
+                    },
+                );
+            }
+        }
+    }
+
+    fn printLine(self: *Logging, messType: format.OutputType, text: []const u8) void {
+        const outDesc = format.output_descriptors.get(messType);
+        const normalDesc = format.output_descriptors.get(.NORMAL);
+        self.printBoth(
+            "{s}{s} {s}{s}\n",
             .{
-                timestamp,
                 format.color_codes.get(outDesc.color),
                 outDesc.label,
                 format.color_codes.get(normalDesc.color),
-            } ++ args;
-
-        std.debug.print(fullFmt, fullArgs);
-
-        self.file.print(fullFmt, fullArgs) catch |erro| {
-            const errorDesc = format.output_descriptors.get(.ERROR);
-
-            std.debug.print(
-                "{s}{s} Can't write to log file: {any}{s}\n",
-                .{
-                    format.color_codes.get(errorDesc.color),
-                    errorDesc.label,
-                    erro,
-                    format.color_codes.get(normalDesc.color),
-                },
-            );
-        };
+                text,
+            },
+        );
     }
 
     fn printRepeated(
@@ -577,9 +607,20 @@ test "simple logging output" {
         .{"Hello from logging test"},
     );
 
+    test_logger.print(
+        .INFO,
+        "Multiline first\nMultiline second",
+        .{},
+    );
+
     const file_size = try log_file.getEndPos();
 
     try std.testing.expect(file_size > 0);
+
+    const contents = try readTestLog(&log_file, std.testing.allocator);
+    defer std.testing.allocator.free(contents);
+    const continuation = "\n                      \x1b[34m[-INFO--] \x1b[39mMultiline second";
+    try std.testing.expect(std.mem.indexOf(u8, contents, continuation) != null);
 }
 
 test "none table with eigthteen rows" {
