@@ -1,9 +1,11 @@
+const input = @import("../input/types.zig");
 const eventDescriptor = @import("eventDescriptor.zig").EventDescriptor;
 const typeDescriptor = @import("eventDescriptor.zig").EventTypeDescriptor;
 const onFull = @import("eventDescriptor.zig").EventQueueOnFull;
 
 pub const EngineShutdownData = struct {
     exit_code: u8,
+    input_action: ?input.ActionEvent = null,
 };
 
 pub const RenderFrameData = struct {
@@ -67,17 +69,31 @@ pub const MenuData = struct {
     menu_id: u32,
 };
 
-pub const InputMode = enum {
-    gameplay,
-    UI,
-    console,
+// Deliberately nonexistent targets for routing tests. No entity/world is spawned.
+pub const TEST_ENTITY_ID: u64 = 0xffff_ffff_ffff_ffff;
+pub const TEST_WORLD_ID: u32 = 0xffff_ffff;
+pub const EntityMoveData = struct {
+    entity_id: u64 = TEST_ENTITY_ID,
+    direction: [3]f32,
+    input_action: input.ActionEvent,
 };
+pub const EntityLookData = struct {
+    entity_id: u64 = TEST_ENTITY_ID,
+    input_action: input.ActionEvent,
+};
+pub const WorldEditInputData = struct {
+    world_id: u32 = TEST_WORLD_ID,
+    entity_id: u64 = TEST_ENTITY_ID,
+    input_action: input.ActionEvent,
+};
+
+pub const InputMode = input.Mode;
 
 pub const InputModeData = struct {
     mode: InputMode,
 };
 
-pub const typeTable: []const typeDescriptor = &[8]typeDescriptor{
+pub const typeTable: []const typeDescriptor = &.{
     typeDescriptor{
         .id = 0,
         .prio = 0,
@@ -86,7 +102,7 @@ pub const typeTable: []const typeDescriptor = &[8]typeDescriptor{
         .onFull = onFull{
             .action = .debt_queue,
         },
-        .events = &[4]eventDescriptor{
+        .events = &.{
             eventDescriptor{
                 .id = 0,
                 .name = "EngineInit",
@@ -118,12 +134,14 @@ pub const typeTable: []const typeDescriptor = &[8]typeDescriptor{
         .onFull = onFull{
             .action = .debt_queue,
         },
-        .events = &[1]eventDescriptor{
+        .events = &.{
             eventDescriptor{
                 .id = 0,
                 .name = "start_render",
                 .dataType = RenderFrameData,
             },
+            .{ .id = 1, .name = "screenshot", .dataType = input.ActionEvent },
+            .{ .id = 2, .name = "toggle_fps", .dataType = input.ActionEvent },
         },
     },
     typeDescriptor{
@@ -135,7 +153,7 @@ pub const typeTable: []const typeDescriptor = &[8]typeDescriptor{
         .onFull = onFull{
             .action = .debt_queue,
         },
-        .events = &[4]eventDescriptor{
+        .events = &.{
             eventDescriptor{
                 .id = 0,
                 .name = "spawn",
@@ -156,6 +174,8 @@ pub const typeTable: []const typeDescriptor = &[8]typeDescriptor{
                 .name = "push", // gives entity momentum
                 .dataType = EntityPushData,
             },
+            .{ .id = 4, .name = "move", .dataType = EntityMoveData },
+            .{ .id = 5, .name = "look", .dataType = EntityLookData },
         },
     },
     typeDescriptor{
@@ -167,7 +187,7 @@ pub const typeTable: []const typeDescriptor = &[8]typeDescriptor{
         .onFull = onFull{
             .action = .debt_queue,
         },
-        .events = &[4]eventDescriptor{
+        .events = &.{
             eventDescriptor{
                 .id = 0,
                 .name = "create",
@@ -188,6 +208,9 @@ pub const typeTable: []const typeDescriptor = &[8]typeDescriptor{
                 .name = "save",
                 .dataType = WorldIdData,
             },
+            .{ .id = 4, .name = "remove", .dataType = WorldEditInputData },
+            .{ .id = 5, .name = "place", .dataType = WorldEditInputData },
+            .{ .id = 6, .name = "toggle_removal", .dataType = WorldEditInputData },
         },
     },
     typeDescriptor{
@@ -238,7 +261,7 @@ pub const typeTable: []const typeDescriptor = &[8]typeDescriptor{
         .onFull = onFull{
             .action = .debt_queue,
         },
-        .events = &[3]eventDescriptor{
+        .events = &.{
             eventDescriptor{
                 .id = 0,
                 .name = "create_menu",
@@ -254,6 +277,13 @@ pub const typeTable: []const typeDescriptor = &[8]typeDescriptor{
                 .name = "hide_menu",
                 .dataType = MenuData,
             },
+            .{ .id = 3, .name = "menu_input", .dataType = input.ActionEvent },
+            .{ .id = 4, .name = "activate", .dataType = input.ActionEvent },
+            .{ .id = 5, .name = "deselect", .dataType = input.ActionEvent },
+            .{ .id = 6, .name = "pointer", .dataType = input.ActionEvent },
+            .{ .id = 7, .name = "command_result", .dataType = input.Result },
+            .{ .id = 8, .name = "bindings_snapshot", .dataType = input.BindingState },
+            .{ .id = 9, .name = "rebind_candidate", .dataType = input.Candidate },
         },
     },
     typeDescriptor{
@@ -265,12 +295,16 @@ pub const typeTable: []const typeDescriptor = &[8]typeDescriptor{
         .onFull = onFull{
             .action = .debt_queue,
         },
-        .events = &[1]eventDescriptor{
-            eventDescriptor{
-                .id = 0,
-                .name = "change_mode",
-                .dataType = InputModeData,
-            },
+        .events = &.{
+            .{ .id = 0, .name = "change_mode", .dataType = InputModeData },
+            .{ .id = 1, .name = "set_enabled", .dataType = bool },
+            .{ .id = 2, .name = "set_menu", .dataType = bool },
+            .{ .id = 3, .name = "replace_bindings", .dataType = input.Replace },
+            .{ .id = 4, .name = "reset_bindings", .dataType = input.Request },
+            .{ .id = 5, .name = "apply_profile", .dataType = input.ApplyProfile },
+            .{ .id = 6, .name = "query_bindings", .dataType = input.Request },
+            .{ .id = 7, .name = "begin_rebind", .dataType = input.Rebind },
+            .{ .id = 8, .name = "cancel_rebind", .dataType = u64 },
         },
     },
 };

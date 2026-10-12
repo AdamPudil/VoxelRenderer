@@ -217,6 +217,82 @@ and total internal reflection, and writes previews to `/tmp/voxel-block-smoke/`.
 Normal builds continue to use GL, GLFW and GLEW. PNG loading uses the vendored
 [stb_image](https://github.com/nothings/stb) implementation and existing PNG writer.
 
+## Developer input and frame queues
+
+The current controls use the `developer` input mode. GLFW callbacks feed a
+remappable input system; the renderer consumes actions from the existing event
+bus. Each frame promotes deferred commands, processes input commands, polls
+GLFW, writes mapped actions directly into their owning **current-frame** queues,
+dispatches actions, and clears current queues. Queue and input-command dumps are
+disabled; FPS is printed approximately once per second and can be toggled with F3.
+Next-frame/debt buffers survive cleanup. Queues without a runtime consumer yet
+are retired at this cleanup point.
+
+`developer` is a binding mode, not a queue. `src/core/input/routing.zig` defines
+an exhaustive action-to-event mapping:
+
+| Actions | Destination events |
+| --- | --- |
+| Forward/back/strafe/up/down; look | `entity.move`, `entity.look` |
+| Remove/place; removal-mode toggle | `world.remove`, `world.place`, `world.toggle_removal` |
+| Menu state, clicks, pointer; binding responses | `UI.menu_input`, `UI.activate`, `UI.deselect`, `UI.pointer`; UI response events |
+| Screenshot; FPS toggle | `render.screenshot`, `render.toggle_fps` |
+| Quit | Existing `core.EngineShutdown` |
+
+Entity/world payloads deliberately contain nonexistent testing IDs:
+`TEST_ENTITY_ID = 0xffffffffffffffff`, `TEST_WORLD_ID = 0xffffffff`.
+Movement includes a local direction (W = `[0, 0, -1]`, release = zero) and
+input phase/frame metadata. These IDs do not spawn or resolve real entities.
+Temporary main-thread adapters preserve the existing camera/menu/editing controls;
+they merge routed events by input sequence to preserve cross-queue click and
+cancellation order. Real subsystem consumers can later read these typed events
+directly, with actual target IDs replacing the test values.
+
+
+F2 (screenshot), F3 (FPS toggle), Tab and V trigger once per press. Movement and
+mouse editing support holding; opening the menu or losing focus cancels active
+controls. Release held controls before using them after a context change.
+
+Load an optional profile with:
+
+```sh
+zig build run -- --input-profile=input.json
+```
+
+Example `input.json` (omitted actions keep defaults; an empty sources list unbinds):
+
+```json
+{
+  "version": 1,
+  "mode": "developer",
+  "bindings": [
+    { "action": "forward", "sources": [{ "key": "E" }, { "key": "UP" }] },
+    { "action": "screenshot", "sources": [] }
+  ]
+}
+```
+
+Runtime callers submit typed commands to `input` through `EventSystem.submit`:
+`replace_bindings`, `reset_bindings`, `apply_profile`, `query_bindings`,
+`begin_rebind`, `cancel_rebind`, `set_menu`, `set_enabled`, or `change_mode`.
+Commands apply at the next frame boundary; responses, binding snapshots and
+capture candidates appear in `UI`. Up to four keyboard/mouse sources
+can bind one button action. The settings layer can save acknowledged profiles
+with `types.saveProfile`; no settings UI or controller backend is included yet.
+Unsupported modes and invalid mappings are rejected without changing bindings.
+
+`beginFrame`, `submitCurrent`, `drainCurrent`, `printCurrent`, and `clearCurrent`
+are frame-coordinator APIs, used on the main thread with no concurrent current
+queue consumers. Other threads use deferred `submit`. Do not mix this explicit
+frame schedule with `processConsumer`/`processType`, which advance queues themselves.
+Current-frame or raw-input overflow returns an error and stops the application;
+it does not silently discard a release or defer a current-frame action.
+
+```sh
+zig build test-input   # mapper, profiles, cancellation, frame queues
+zig build test         # also includes existing block tests
+```
+
 ## Startup building
 
 A matte gray building starts at block X=0, Z=0 and extends through X/Z=15:

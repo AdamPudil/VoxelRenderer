@@ -40,8 +40,6 @@ pub const Logging = struct {
     const TAG_COLUMN_WIDTH: usize = 9;
 
     pub fn init(self: *Logging, stage: format.ProductionStage) void {
-        // Several test modules share the global logger. Reinitializing it
-        // would truncate test.log and erase output written by earlier tests.
         if (self.initialized) return;
 
         self.stage = stage;

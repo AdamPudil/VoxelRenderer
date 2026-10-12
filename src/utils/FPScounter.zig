@@ -36,7 +36,8 @@ pub const FpsCounter = struct {
         self.accumulator += dt;
         self.frames += 1;
 
-        if (self.frames >= 50) {
+        // Report once per second even when rendering fewer than 50 FPS.
+        if (self.accumulator >= 1.0) {
             self.fps = @as(f64, @floatFromInt(self.frames)) / self.accumulator;
 
             if (self.enabled) {

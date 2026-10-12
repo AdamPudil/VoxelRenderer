@@ -10,6 +10,8 @@ const Menu = @import("graphics/blockMenu.zig").Menu;
 const EditCooldown = @import("world/blockEditing.zig").EditCooldown;
 const Block = @import("world/block.zig").Block;
 const wc = @import("world/worldConstants.zig");
+const input = @import("core/input/inputSystem.zig");
+const InputBackend = @import("core/input/glfwBackend.zig").Backend;
 
 const c = @cImport({
     @cInclude("GL/glew.h");
@@ -34,6 +36,7 @@ pub fn main() !void {
     var profile: []const u8 = "auto";
     var gpu_info = false;
     var assets: []const u8 = "assets/blocks";
+    var input_profile_path: ?[]const u8 = null;
     for (args[1..]) |arg| {
         if (std.mem.startsWith(u8, arg, "--shader=")) {
             profile = arg[9..];
@@ -43,10 +46,13 @@ pub fn main() !void {
         } else if (std.mem.startsWith(u8, arg, "--assets=")) {
             assets = arg[9..];
             if (assets.len == 0) return error.MissingAssetDirectory;
+        } else if (std.mem.startsWith(u8, arg, "--input-profile=")) {
+            input_profile_path = arg[16..];
+            if (input_profile_path.?.len == 0) return error.MissingInputProfile;
         } else if (std.mem.eql(u8, arg, "--gpu-info")) {
             gpu_info = true;
         } else {
-            std.debug.print("Usage: voxel [--shader=auto|thinkpad|desktop] [--gpu-info] [--assets=directory]\n", .{});
+            std.debug.print("Usage: voxel [--shader=auto|thinkpad|desktop] [--gpu-info] [--assets=directory] [--input-profile=file.json]\n", .{});
             return error.UnknownArgument;
         }
     }
@@ -138,16 +144,19 @@ pub fn main() !void {
 
     c.glfwSetInputMode(window, c.GLFW_CURSOR, c.GLFW_CURSOR_DISABLED);
 
-    var last_x: f64 = 0;
-    var last_y: f64 = 0;
-    c.glfwGetCursorPos(window, &last_x, &last_y);
-    var previous_tab = false;
-    var previous_v = false;
-    var previous_left = false;
-    var previous_right = false;
-    var previous_escape = false;
-    var previous_f2 = false;
-    var previous_f3 = false;
+    const event_bus = try allocator.create(input.Bus);
+    defer allocator.destroy(event_bus);
+    event_bus.* = .{};
+    if (input_profile_path) |path| {
+        const bindings = try input.t.loadProfile(allocator, std.fs.cwd(), path);
+        _ = try event_bus.submit("input", input.Command{ .apply_profile = .{ .request_id = 1, .profile = bindings } });
+    }
+    var input_system = input.InputSystem{ .bus = event_bus };
+    var input_backend = InputBackend{ .window = @ptrCast(window) };
+    input_backend.attach();
+    defer input_backend.detach();
+    var controls = DeveloperControls{ .menu = &menu };
+    var frame: u64 = 0;
     var edit_cooldown = EditCooldown{};
 
     gl.useProgram(program);
@@ -156,57 +165,36 @@ pub fn main() !void {
     defer fps_counter.deinit();
 
     while (c.glfwWindowShouldClose(window) == 0) {
-        c.glfwPollEvents();
+        frame += 1;
+        controls.begin();
+        event_bus.beginFrame();
+        try input_system.begin(frame);
+        try input_backend.poll(&input_system);
         var framebuffer_width: c_int = 0;
         var framebuffer_height: c_int = 0;
         var window_width: c_int = 0;
         var window_height: c_int = 0;
         c.glfwGetFramebufferSize(window, &framebuffer_width, &framebuffer_height);
         c.glfwGetWindowSize(window, &window_width, &window_height);
-        var x: f64 = 0;
-        var y: f64 = 0;
-        c.glfwGetCursorPos(window, &x, &y);
-        const tab = c.glfwGetKey(window, c.GLFW_KEY_TAB) == c.GLFW_PRESS;
-        const escape = c.glfwGetKey(window, c.GLFW_KEY_ESCAPE) == c.GLFW_PRESS;
-        const v = c.glfwGetKey(window, c.GLFW_KEY_V) == c.GLFW_PRESS;
-        const f2 = c.glfwGetKey(window, c.GLFW_KEY_F2) == c.GLFW_PRESS;
-        const f3 = c.glfwGetKey(window, c.GLFW_KEY_F3) == c.GLFW_PRESS;
-        const left = c.glfwGetMouseButton(window, c.GLFW_MOUSE_BUTTON_LEFT) == c.GLFW_PRESS;
-        const right_mouse = c.glfwGetMouseButton(window, c.GLFW_MOUSE_BUTTON_RIGHT) == c.GLFW_PRESS;
-        var context_changed = false;
-        if ((tab and !previous_tab) or (escape and !previous_escape and menu.open)) {
-            menu.open = !menu.open;
-            edit_cooldown.armed = false;
-            context_changed = true;
-            c.glfwSetInputMode(window, c.GLFW_CURSOR, if (menu.open) c.GLFW_CURSOR_NORMAL else c.GLFW_CURSOR_DISABLED);
-            c.glfwGetCursorPos(window, &x, &y);
-        } else if (escape and !previous_escape) break;
-        if (v and !previous_v and !menu.open) {
-            menu.removal.voxel = !menu.removal.voxel;
-            edit_cooldown.armed = false;
-        }
-        if (f3 and !previous_f3) fps_counter.toggle();
-        const screenshot = f2 and !previous_f2;
-        if (menu.open) {
-            if (left and !previous_left) menu.click(@floatFromInt(window_width), @floatFromInt(window_height), @floatCast(x), @floatCast(y), registry.blocks.items.len);
-            if (right_mouse and !previous_right) menu.selected = null;
-        } else if (!context_changed) {
-            yaw -= @as(f32, @floatCast(x - last_x)) * LOOK_SPEED;
-            pitch -= @as(f32, @floatCast(y - last_y)) * LOOK_SPEED;
-        }
-        last_x = x;
-        last_y = y;
-        previous_tab = tab;
-        previous_escape = escape;
-        previous_v = v;
-        previous_left = left;
-        previous_right = right_mouse;
-        previous_f2 = f2;
-        previous_f3 = f3;
+        controls.width = @floatFromInt(window_width);
+        controls.height = @floatFromInt(window_height);
+        controls.block_count = registry.blocks.items.len;
+        try input.routing.drainForDeveloperTools(event_bus, &controls);
+        event_bus.clearCurrent();
+        // Retire the current frame; next/debt buffers remain intact.
+        if (controls.quit) break;
+        if (controls.toggle_fps) fps_counter.toggle();
+        if (controls.reset_edit) edit_cooldown.armed = false;
         if (framebuffer_width == 0 or framebuffer_height == 0) {
             c.glfwWaitEventsTimeout(0.05);
             continue;
         }
+        const left = controls.down(.remove) or controls.pressed[@intFromEnum(input.t.Action.remove)];
+        const right_mouse = controls.down(.place) or controls.pressed[@intFromEnum(input.t.Action.place)];
+        const x = input_system.pointer[0];
+        const y = input_system.pointer[1];
+        yaw -= controls.look[0] * LOOK_SPEED;
+        pitch -= controls.look[1] * LOOK_SPEED;
 
         if (pitch > 1.5) pitch = 1.5;
         if (pitch < -1.5) pitch = -1.5;
@@ -223,32 +211,12 @@ pub fn main() !void {
             @cos(yaw - 1.57),
         };
 
-        if (!menu.open) {
-            if (c.glfwGetKey(window, c.GLFW_KEY_W) == c.GLFW_PRESS) {
-                cam_pos[0] += forward[0] * MOVE_SPEED;
-                cam_pos[1] += forward[1] * MOVE_SPEED;
-                cam_pos[2] += forward[2] * MOVE_SPEED;
-            }
-            if (c.glfwGetKey(window, c.GLFW_KEY_S) == c.GLFW_PRESS) {
-                cam_pos[0] -= forward[0] * MOVE_SPEED;
-                cam_pos[1] -= forward[1] * MOVE_SPEED;
-                cam_pos[2] -= forward[2] * MOVE_SPEED;
-            }
-            if (c.glfwGetKey(window, c.GLFW_KEY_A) == c.GLFW_PRESS) {
-                cam_pos[0] -= right[0] * MOVE_SPEED;
-                cam_pos[2] -= right[2] * MOVE_SPEED;
-            }
-            if (c.glfwGetKey(window, c.GLFW_KEY_D) == c.GLFW_PRESS) {
-                cam_pos[0] += right[0] * MOVE_SPEED;
-                cam_pos[2] += right[2] * MOVE_SPEED;
-            }
-            if (c.glfwGetKey(window, c.GLFW_KEY_SPACE) == c.GLFW_PRESS) {
-                cam_pos[1] += MOVE_SPEED;
-            }
-            if (c.glfwGetKey(window, c.GLFW_KEY_LEFT_SHIFT) == c.GLFW_PRESS) {
-                cam_pos[1] -= MOVE_SPEED;
-            }
-        }
+        const forward_amount = controls.axis(.forward, .backward);
+        const right_amount = controls.axis(.right, .left);
+        for (0..3) |axis| cam_pos[axis] += forward[axis] * forward_amount * MOVE_SPEED;
+        cam_pos[0] += right[0] * right_amount * MOVE_SPEED;
+        cam_pos[2] += right[2] * right_amount * MOVE_SPEED;
+        cam_pos[1] += controls.axis(.up, .down) * MOVE_SPEED;
 
         gl.useProgram(program);
         c.glViewport(0, 0, framebuffer_width, framebuffer_height);
@@ -320,7 +288,7 @@ pub fn main() !void {
         try menu.draw(@floatFromInt(window_width), @floatFromInt(window_height), @floatCast(x), @floatCast(y), &registry, &icons);
         c.glfwSwapBuffers(window);
 
-        if (screenshot) {
+        if (controls.screenshot) {
             gl_utils.saveScreenshot(framebuffer_width, framebuffer_height) catch {};
         }
         fps_counter.update();
@@ -331,3 +299,85 @@ fn glString(name: c_uint) []const u8 {
     const value = c.glGetString(name);
     return if (value == null) "unavailable" else std.mem.span(value);
 }
+
+/// Temporary adapters consume routed test-target events for the existing camera
+/// and tools. No real entity/world target is resolved from the placeholder IDs.
+/// Device details never cross this boundary; held state survives queue draining.
+const DeveloperControls = struct {
+    menu: *Menu,
+    width: f32 = 0,
+    height: f32 = 0,
+    block_count: usize = 0,
+    held: [input.t.action_count]bool = .{false} ** input.t.action_count,
+    pressed: [input.t.action_count]bool = .{false} ** input.t.action_count,
+    look: [2]f32 = .{ 0, 0 },
+    quit: bool = false,
+    screenshot: bool = false,
+    toggle_fps: bool = false,
+    reset_edit: bool = false,
+
+    fn begin(self: *DeveloperControls) void {
+        self.pressed = .{false} ** input.t.action_count;
+        self.look = .{ 0, 0 };
+        self.screenshot = false;
+        self.toggle_fps = false;
+        self.reset_edit = false;
+    }
+    fn down(self: *const DeveloperControls, action: input.t.Action) bool {
+        return self.held[@intFromEnum(action)];
+    }
+    fn axis(self: *const DeveloperControls, positive: input.t.Action, negative: input.t.Action) f32 {
+        return @as(f32, if (self.down(positive)) 1 else 0) - @as(f32, if (self.down(negative)) 1 else 0);
+    }
+    pub fn handle(self: *DeveloperControls, comptime name: []const u8, event: input.Output) !void {
+        _ = name;
+        switch (event) {
+            .action => |action| {
+                const i = @intFromEnum(action.action);
+                switch (action.phase) {
+                    .started => {
+                        self.held[i] = true;
+                        self.pressed[i] = true;
+                    },
+                    .ended => self.held[i] = false,
+                    .cancelled => {
+                        self.held[i] = false;
+                        self.pressed[i] = false;
+                    },
+                    .changed => {},
+                }
+                if (action.action == .look) {
+                    if (action.phase == .cancelled) {
+                        self.look = .{ 0, 0 };
+                        self.pressed[@intFromEnum(input.t.Action.remove)] = false;
+                        self.pressed[@intFromEnum(input.t.Action.place)] = false;
+                        self.reset_edit = true;
+                    } else {
+                        self.look[0] += action.value[0];
+                        self.look[1] += action.value[1];
+                    }
+                }
+                if (action.action == .toggle_menu and action.phase == .changed) {
+                    self.menu.open = action.value[0] != 0;
+                    self.reset_edit = true;
+                }
+                if (action.phase != .started) return;
+                switch (action.action) {
+                    .back => self.quit = true,
+                    .toggle_removal => {
+                        self.menu.removal.voxel = !self.menu.removal.voxel;
+                        self.reset_edit = true;
+                    },
+                    .activate => self.menu.click(self.width, self.height, action.value[0], action.value[1], self.block_count),
+                    .deselect => self.menu.selected = null,
+                    .screenshot => self.screenshot = true,
+                    .toggle_fps => self.toggle_fps = !self.toggle_fps,
+                    else => {},
+                }
+            },
+            // Settings can consume these responses here when its UI is added.
+            // Queue dumping remains available through EventSystem.printCurrent.
+            .command_result, .bindings_snapshot, .rebind_candidate => {},
+        }
+    }
+};

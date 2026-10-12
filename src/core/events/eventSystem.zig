@@ -21,6 +21,59 @@ pub fn EventSystem(comptime descriptors: []const descriptor.EventTypeDescriptor)
         queues: Queues = .{},
         locks: [descriptors.len]std.Thread.Mutex = [_]std.Thread.Mutex{.{}} ** descriptors.len,
 
+        /// Main-thread frame boundary, before any current-frame producers or
+        /// consumers run. Deferred submissions remain the thread-safe API.
+        pub fn beginFrame(self: *Self) void {
+            inline for (descriptors, 0..) |desc, i| {
+                self.locks[i].lock();
+                _ = @field(self.queues, desc.name).advanceFrame();
+                self.locks[i].unlock();
+            }
+        }
+
+        /// Only the frame coordinator may call this, before draining consumers.
+        /// Unlike submit(), this never silently defers a current-frame event.
+        pub fn submitCurrent(self: *Self, comptime name: []const u8, value: @FieldType(Queues, name).Value) queue_module.RingBufferError!void {
+            try @field(self.queues, name).active.write(value);
+        }
+
+        /// Frame coordinator only, after printing and dispatch. Unhandled
+        /// diagnostic events are retired too; deferred work is never cleared.
+        pub fn clearCurrent(self: *Self) void {
+            inline for (descriptors) |desc| @field(self.queues, desc.name).active.clear();
+        }
+
+        /// Consume without advancing again. Reading removes only current events;
+        /// next/debt buffers survive for the following frame.
+        pub fn drainCurrent(self: *Self, comptime consumer: descriptor.EventConsumer, comptime name: []const u8, handler: anytype) !usize {
+            const index = comptime descriptorIndex(name);
+            if (descriptors[index].consumer != consumer) @compileError("wrong queue consumer");
+            var count: usize = 0;
+            while (@field(self.queues, name).read()) |value| {
+                try handler.handle(name, value);
+                count += 1;
+            } else |err| switch (err) {
+                error.Empty => {},
+                else => return err,
+            }
+            return count;
+        }
+
+        /// Main-thread diagnostic snapshot, including empty frames.
+        pub fn printCurrent(self: *const Self, frame: u64) void {
+            std.debug.print("Frame {d} current event queues:\n", .{frame});
+            inline for (descriptors) |desc| {
+                const buffer = &@field(self.queues, desc.name).active;
+                std.debug.print("  {s}: {d}\n", .{ desc.name, buffer.count });
+                for (0..buffer.count) |offset| {
+                    const value = buffer.buffer[(buffer.read_index + offset) % buffer.buffer.len];
+                    var text_buffer: [2048]u8 = undefined;
+                    const text = event_module.eventToString(value, &text_buffer) catch @tagName(std.meta.activeTag(value));
+                    std.debug.print("    {s}\n", .{text});
+                }
+            }
+        }
+
         /// Type-safe producer API. Events are staged for the owner's next
         /// processing pass and never modify the buffer currently being read.
         pub fn submit(
