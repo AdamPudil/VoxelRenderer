@@ -23,22 +23,73 @@ const STREAM_CHUNKS_Y = wc.STREAM_CHUNKS_Y;
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    _ = c.glfwInit();
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+    var profile: []const u8 = "auto";
+    var gpu_info = false;
+    for (args[1..]) |arg| {
+        if (std.mem.startsWith(u8, arg, "--shader=")) {
+            profile = arg[9..];
+            if (!std.mem.eql(u8, profile, "auto") and
+                !std.mem.eql(u8, profile, "thinkpad") and
+                !std.mem.eql(u8, profile, "desktop")) return error.InvalidShaderProfile;
+        } else if (std.mem.eql(u8, arg, "--gpu-info")) {
+            gpu_info = true;
+        } else {
+            std.debug.print("Usage: voxel [--shader=auto|thinkpad|desktop] [--gpu-info]\n", .{});
+            return error.UnknownArgument;
+        }
+    }
+
+    if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
     defer c.glfwTerminate();
 
-    const window = c.glfwCreateWindow(res[0], res[1], "Voxel Renderer in zig", null, null);
+    // Request the desktop context first, retaining the existing GLSL 4.20 baseline.
+    c.glfwWindowHint(c.GLFW_OPENGL_PROFILE, c.GLFW_OPENGL_CORE_PROFILE);
+    c.glfwWindowHint(c.GLFW_CONTEXT_VERSION_MAJOR, 4);
+    c.glfwWindowHint(c.GLFW_CONTEXT_VERSION_MINOR, 6);
+    if (gpu_info) c.glfwWindowHint(c.GLFW_VISIBLE, c.GLFW_FALSE);
+    const window = c.glfwCreateWindow(res[0], res[1], "Voxel Renderer in zig", null, null) orelse fallback: {
+        c.glfwWindowHint(c.GLFW_CONTEXT_VERSION_MINOR, 2);
+        break :fallback c.glfwCreateWindow(res[0], res[1], "Voxel Renderer in zig", null, null) orelse {
+            std.debug.print("Unable to create an OpenGL 4.2+ context required by the current shaders.\n", .{});
+            return error.OpenGLContextUnavailable;
+        };
+    };
+    defer c.glfwDestroyWindow(window);
     c.glfwMakeContextCurrent(window);
-    _ = c.glewInit();
+    c.glewExperimental = c.GL_TRUE;
+    if (c.glewInit() != c.GLEW_OK) return error.GlewInitFailed;
 
-    var fps_counter = try fps.FpsCounter.init();
+    const renderer = glString(c.GL_RENDERER);
+    std.debug.print("GPU: {s}\nVendor: {s}\nOpenGL: {s}\nGLSL: {s}\n", .{
+        renderer, glString(c.GL_VENDOR), glString(c.GL_VERSION), glString(c.GL_SHADING_LANGUAGE_VERSION),
+    });
+    var major: c_int = 0;
+    var minor: c_int = 0;
+    c.glGetIntegerv(c.GL_MAJOR_VERSION, &major);
+    c.glGetIntegerv(c.GL_MINOR_VERSION, &minor);
+    const supports_desktop = major > 4 or (major == 4 and minor >= 6);
+    const desktop = std.mem.eql(u8, profile, "desktop") or
+        (std.mem.eql(u8, profile, "auto") and supports_desktop and
+        std.mem.indexOf(u8, renderer, "RTX 3060") != null);
+    if (desktop and !supports_desktop) {
+        std.debug.print("The desktop shader requires OpenGL 4.6 / GLSL 4.60. Use --shader=thinkpad on this GPU.\n", .{});
+        return error.DesktopShaderUnsupported;
+    }
+    const shader_path = if (desktop) "src/graphics/shaders/desktop/voxel" else "src/graphics/shaders/voxel";
+    std.debug.print("Shader profile: {s} ({s})\n", .{ if (desktop) "desktop" else "thinkpad", shader_path });
+    const program = try gl_utils.createProgram(shader_path);
+    defer gl.deleteProgram(program);
+    if (gpu_info) return;
 
     var vao: c_uint = 0;
     gl.genVertexArrays(1, &vao);
     gl.bindVertexArray(vao);
+    defer c.__glewDeleteVertexArrays.?(1, &vao);
 
-    // load shaders
-    const program = try gl_utils.createProgram("src/graphics/shaders/voxel");
-    std.debug.print("program = {}\n", .{program});
+    var fps_counter = try fps.FpsCounter.init();
+    defer fps_counter.deinit();
 
     // camera
     var cam_pos = [3]f32{ 100, 30, 100 };
@@ -184,4 +235,9 @@ pub fn main() !void {
 
         c.glfwPollEvents();
     }
+}
+
+fn glString(name: c_uint) []const u8 {
+    const value = c.glGetString(name);
+    return if (value == null) "unavailable" else std.mem.span(value);
 }
