@@ -55,7 +55,7 @@ Run `zig build run` from the repository root. Startup creates missing
 sample `.block` descriptors and MagicaVoxel `.vox` models in `assets/blocks`:
 red, green, blue, white, black, yellow, orange, purple, cyan, pink, gray, brown,
 lighter red/green/blue variants, coarse checkerboard, fine checkerboard, and an
-open frame, gold, copper, iron, and mirror (22 entries total).
+open frame, gold, copper, iron, mirror, and eight glass variants (30 entries total).
 Existing sample files are preserved. Use `--assets=some/directory` to choose a
 different block folder (the samples are created there too).
 
@@ -128,8 +128,60 @@ This saves block definitions, not world placements.
 
 These are artistic polished-surface presets, not measured optical constants.
 
-Reflections use up to six bounces, with local shading at the final hit.
-Only loaded geometry participates; misses use the sky or an icon studio environment.
+Clear and sanded glass each come in **White (neutral), Red, Green, and Blue**.
+Clear glass uses opacity `0.04`; sanded glass uses `0.50`. Both use IOR `1.5`.
+Select them in the block menu (use Next on smaller windows).
+
+```text
+format: 2
+name: Glass Red
+model: 24_glass_red.vox
+color: 255, 105, 105
+opacity: 0.04
+ior: 1.5
+reflectivity: 0
+metallic: 0
+```
+
+- `opacity`: optional finite value 0–1; absent preserves model alpha. For glass,
+  this controls loss of transmission and a simple colored haze per 16 voxels of
+  travel. 0 is clear, 1 is opaque. `transparency` is an alternative spelling with
+  the inverse value (`1 - opacity`); specifying both is an error.
+- `ior`: finite index of refraction from 1 to 2.5, default 1.5. At 1 the ray does
+  not bend; at 1.5 it bends like the glass preset. Used only below full opacity.
+- Glass color filters transmitted RGB over distance. White is neutral; stacked
+  colors multiply their filters (subtractive mixing), and thicker glass filters
+  more strongly. Glass remains occupied, collidable/pickable by existing voxel
+  queries, and editable even at opacity 0; it is not an empty voxel.
+- Glass uses dielectric Fresnel reflection derived from IOR, with `reflectivity`
+  as a minimum surface reflection. `metallic` tints opaque reflections only.
+
+The shared shader follows both reflected and refracted rays, bending at medium
+entry/exit and handling total internal reflection. Contiguous equal glass voxels
+form one medium instead of charging opacity at every internal face. Sanded glass
+uses higher opacity/haze; it does not yet blur the transmitted image.
+
+Glass-to-glass boundaries never spawn reflections, including between different
+colors or opacity values. They preserve color filtering and refract for differing
+IORs when possible; an internal glass-to-glass critical-angle case continues
+straight. Fresnel reflection and total internal reflection apply at glass/air
+boundaries.
+
+Work is bounded to 32 ray segments per pixel, 12 transmission/interface steps per
+path, and six reflection bounces. Deep optical paths may lose residual light at
+these limits; the final opaque reflection hit uses local shading. Opaque matte
+surfaces need no extra rays. Only geometry in the loaded GPU region participates;
+misses use the sky. There is no dispersion, caustics or full global illumination.
+Selection/picking stays on the first surface. Scene transmission is composited in
+the shader; icons keep transparent backgrounds outside the model and use a neutral
+studio environment. Both ThinkPad and desktop shader profiles share this code.
+
+Materials still use 64 bits per voxel. Reflectivity and metallic retain their
+bytes; the formerly redundant transparency byte now stores an IOR code (0 means
+non-transmitting/empty, 1–255 encodes IOR 1–2.5). Opacity retains its own byte.
+The engine's `.block` and `.vox` files remain backward compatible; no saved-world
+binary format exists to migrate. Reflection, opacity and tint values are quantized
+to bytes when loaded.
 
 The registry stores definitions in an array indexed by numeric ID, plus a name
 hash map with variant slots. IDs are assigned from sorted descriptor filenames,
@@ -159,7 +211,9 @@ zig build test-render   # optional headless Mesa/EGL icon and menu integration
 ```
 
 `test-render` requires EGL development files and Mesa software rendering. It
-checks both shader profiles and writes previews to `/tmp/voxel-block-smoke/`.
+checks both shader profiles, reflected offscreen targets, all six face directions,
+material tint, matte fallback, transmission, color mixing, oblique refraction,
+and total internal reflection, and writes previews to `/tmp/voxel-block-smoke/`.
 Normal builds continue to use GL, GLFW and GLEW. PNG loading uses the vendored
 [stb_image](https://github.com/nothings/stb) implementation and existing PNG writer.
 

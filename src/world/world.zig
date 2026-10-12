@@ -251,7 +251,7 @@ pub const World = struct {
     }
 
     fn packVoxelLo(v: Voxel) u32 {
-        return (@as(u32, v.r)) | (@as(u32, v.g) << 8) | (@as(u32, v.b) << 16) | (@as(u32, v.transparency) << 24);
+        return (@as(u32, v.r)) | (@as(u32, v.g) << 8) | (@as(u32, v.b) << 16) | (@as(u32, v.refractive_index) << 24);
     }
 
     fn packVoxelHi(v: Voxel) u32 {
@@ -901,4 +901,17 @@ test "voxel deletion preserves palette and instances, last deletion frees the bl
     try std.testing.expect(try world.removeVoxel(.{ 1, 0, 0 }));
     try std.testing.expect(world.blockIsEmpty(.{ 0, 0, 0 }));
     try std.testing.expectEqual(@as(u32, 1), world.chunks.getPtr(.{ .x = 0, .y = 0, .z = 0 }).?.chunkData.block.solid_count);
+}
+
+test "fully transparent glass remains occupied, pickable and packed" {
+    const a = std.testing.allocator;
+    var world = try World.initCpu(a);
+    defer world.deinit() catch unreachable;
+    var glass = Block.initMono(0, Voxel.rgb(255, 100, 100));
+    glass.blockData.mono.opacity = 0;
+    glass.blockData.mono.refractive_index = Voxel.encodeIor(1.5);
+    try world.setBlock(.{ 0, 0, 0 }, &glass);
+    try std.testing.expect(!world.blockIsEmpty(.{ 0, 0, 0 }));
+    try std.testing.expect(world.raycast(.{ 8, 8, 32 }, .{ 0, 0, -1 }, 64) != null);
+    try std.testing.expectEqual(glass.blockData.mono.refractive_index, @as(u8, @intCast(World.packVoxelLo(glass.blockData.mono) >> 24)));
 }

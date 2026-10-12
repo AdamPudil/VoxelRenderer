@@ -12,6 +12,8 @@ pub const Metadata = struct {
     color: ?[3]u8 = null,
     reflectivity: f32 = 0,
     metallic: f32 = 0,
+    opacity: ?f32 = null,
+    ior: f32 = 1.5,
 };
 
 /// Returned slices borrow the descriptor text. Paths are relative to its folder.
@@ -24,6 +26,8 @@ pub fn parseMetadata(text: []const u8) !Metadata {
     var color: ?[3]u8 = null;
     var reflectivity: f32 = 0;
     var metallic: f32 = 0;
+    var opacity: ?f32 = null;
+    var ior: f32 = 1.5;
     var seen: u16 = 0;
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
@@ -33,7 +37,7 @@ pub fn parseMetadata(text: []const u8) !Metadata {
         const key = std.mem.trim(u8, trimmed[0..colon], " \t");
         var value = std.mem.trim(u8, trimmed[colon + 1 ..], " \t");
         if (value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"') value = value[1 .. value.len - 1];
-        const field: u16 = if (std.ascii.eqlIgnoreCase(key, "name") or std.ascii.eqlIgnoreCase(key, "block name")) 1 else if (std.ascii.eqlIgnoreCase(key, "variant")) 2 else if (std.ascii.eqlIgnoreCase(key, "model") or std.ascii.eqlIgnoreCase(key, "model path")) 4 else if (std.ascii.eqlIgnoreCase(key, "icon") or std.ascii.eqlIgnoreCase(key, "icon path")) 8 else if (std.ascii.eqlIgnoreCase(key, "format")) 16 else if (std.ascii.eqlIgnoreCase(key, "color")) 32 else if (std.ascii.eqlIgnoreCase(key, "reflectivity") or std.ascii.eqlIgnoreCase(key, "reflectiveness")) 64 else if (std.ascii.eqlIgnoreCase(key, "metallic")) 128 else return error.UnknownBlockAttribute;
+        const field: u16 = if (std.ascii.eqlIgnoreCase(key, "name") or std.ascii.eqlIgnoreCase(key, "block name")) 1 else if (std.ascii.eqlIgnoreCase(key, "variant")) 2 else if (std.ascii.eqlIgnoreCase(key, "model") or std.ascii.eqlIgnoreCase(key, "model path")) 4 else if (std.ascii.eqlIgnoreCase(key, "icon") or std.ascii.eqlIgnoreCase(key, "icon path")) 8 else if (std.ascii.eqlIgnoreCase(key, "format")) 16 else if (std.ascii.eqlIgnoreCase(key, "color")) 32 else if (std.ascii.eqlIgnoreCase(key, "reflectivity") or std.ascii.eqlIgnoreCase(key, "reflectiveness")) 64 else if (std.ascii.eqlIgnoreCase(key, "metallic")) 128 else if (std.ascii.eqlIgnoreCase(key, "opacity") or std.ascii.eqlIgnoreCase(key, "transparency")) 256 else if (std.ascii.eqlIgnoreCase(key, "ior")) 512 else return error.UnknownBlockAttribute;
         if (seen & field != 0) return error.DuplicateBlockAttribute;
         seen |= field;
         switch (field) {
@@ -54,11 +58,19 @@ pub fn parseMetadata(text: []const u8) !Metadata {
             },
             64 => reflectivity = try materialFactor(value),
             128 => metallic = try materialFactor(value),
+            256 => {
+                const factor = try materialFactor(value);
+                opacity = if (std.ascii.eqlIgnoreCase(key, "transparency")) 1 - factor else factor;
+            },
+            512 => {
+                ior = std.fmt.parseFloat(f32, value) catch return error.InvalidRefractiveIndex;
+                if (!std.math.isFinite(ior) or ior < 1 or ior > 2.5) return error.InvalidRefractiveIndex;
+            },
             else => unreachable,
         }
     }
     if (name == null or name.?.len == 0 or model == null or model.?.len == 0) return error.MissingBlockAttribute;
-    return .{ .name = name.?, .model = model.?, .variant = variant, .icon = icon, .format = version, .color = color, .reflectivity = reflectivity, .metallic = metallic };
+    return .{ .name = name.?, .model = model.?, .variant = variant, .icon = icon, .format = version, .color = color, .reflectivity = reflectivity, .metallic = metallic, .opacity = opacity, .ior = ior };
 }
 
 fn materialFactor(value: []const u8) !f32 {
@@ -76,6 +88,10 @@ pub fn encodeMetadata(allocator: std.mem.Allocator, meta: Metadata) ![]u8 {
     if (meta.name.len == 0 or meta.model.len == 0) return error.MissingBlockAttribute;
     if (!std.math.isFinite(meta.reflectivity) or meta.reflectivity < 0 or meta.reflectivity > 1 or
         !std.math.isFinite(meta.metallic) or meta.metallic < 0 or meta.metallic > 1) return error.InvalidMaterialFactor;
+    if (meta.opacity) |opacity| {
+        if (!std.math.isFinite(opacity) or opacity < 0 or opacity > 1) return error.InvalidMaterialFactor;
+    }
+    if (!std.math.isFinite(meta.ior) or meta.ior < 1 or meta.ior > 2.5) return error.InvalidRefractiveIndex;
     var text = std.ArrayList(u8).init(allocator);
     errdefer text.deinit();
     const w = text.writer();
@@ -83,6 +99,8 @@ pub fn encodeMetadata(allocator: std.mem.Allocator, meta: Metadata) ![]u8 {
     if (meta.icon) |icon| try w.print("icon: \"{s}\"\n", .{icon});
     if (meta.color) |rgb| try w.print("color: {d}, {d}, {d}\n", .{ rgb[0], rgb[1], rgb[2] });
     try w.print("reflectivity: {d}\nmetallic: {d}\n", .{ meta.reflectivity, meta.metallic });
+    if (meta.opacity) |opacity| try w.print("opacity: {d}\n", .{opacity});
+    try w.print("ior: {d}\n", .{meta.ior});
     return text.toOwnedSlice();
 }
 
@@ -118,6 +136,8 @@ fn applyVoxelMaterial(voxel: *Voxel, meta: Metadata) void {
     }
     voxel.reflectiveness = @intFromFloat(@round(meta.reflectivity * 255));
     voxel.metallic = @intFromFloat(@round(meta.metallic * 255));
+    if (meta.opacity) |opacity| voxel.opacity = @intFromFloat(@round(opacity * 255));
+    voxel.refractive_index = if (voxel.opacity < 255) Voxel.encodeIor(meta.ior) else 0;
 }
 
 fn u32le(bytes: []const u8, offset: usize) !u32 {
@@ -187,7 +207,7 @@ pub const BlockLoader = struct {
                 has_palette = true;
                 for (1..256) |i| {
                     const rgba = data[(i - 1) * 4 ..][0..4];
-                    palette[i] = Voxel.getVoxel(rgba[0], rgba[1], rgba[2], 0, rgba[3], 0, 0);
+                    palette[i] = Voxel.getVoxel(rgba[0], rgba[1], rgba[2], if (rgba[3] > 0 and rgba[3] < 255) Voxel.encodeIor(1.5) else 0, rgba[3], 0, 0);
                 }
             } else if (std.mem.eql(u8, tag, "PACK")) {
                 if (size != 4 or try u32le(data, 0) != 1) return error.MultipleVoxModels;
@@ -279,4 +299,30 @@ test "material palette overrides preserve geometry and survive copies" {
     applyMaterial(&mono, material);
     try std.testing.expectEqual(v, mono.blockData.mono);
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(Voxel));
+}
+
+test "opacity and IOR roundtrip, aliases, and fully clear occupied glass" {
+    const a = std.testing.allocator;
+    const meta = try parseMetadata("name: Glass\nmodel: glass.vox\nopacity: 0\nior: 1.5\ncolor: 255, 100, 100\n");
+    const text = try encodeMetadata(a, meta);
+    defer a.free(text);
+    const saved = try parseMetadata(text);
+    try std.testing.expectEqual(@as(?f32, 0), saved.opacity);
+    try std.testing.expectEqual(@as(f32, 1.5), saved.ior);
+    var block = Block.initMono(0, Voxel.rgb(255, 255, 255));
+    applyMaterial(&block, saved);
+    try std.testing.expect(!block.blockData.mono.isEmpty());
+    try std.testing.expectEqual(@as(u8, 0), block.blockData.mono.opacity);
+    try std.testing.expect(block.blockData.mono.refractive_index > 0);
+    const alias = try parseMetadata("name: Glass\nmodel: g.vox\ntransparency: 0.75\n");
+    try std.testing.expectEqual(@as(?f32, 0.25), alias.opacity);
+    try std.testing.expectError(error.DuplicateBlockAttribute, parseMetadata("name: x\nmodel: a.vox\nopacity: 0.2\ntransparency: 0.8"));
+    for ([_][]const u8{ "nan", "inf", "0.9", "2.51" }) |value| {
+        const invalid = try std.fmt.allocPrint(a, "name: x\nmodel: a.vox\nior: {s}", .{value});
+        defer a.free(invalid);
+        try std.testing.expectError(error.InvalidRefractiveIndex, parseMetadata(invalid));
+    }
+    try std.testing.expectError(error.InvalidMaterialFactor, parseMetadata("name: x\nmodel: a.vox\nopacity: -0.1"));
+    try std.testing.expectEqual(@as(u8, 1), Voxel.encodeIor(1));
+    try std.testing.expectEqual(@as(u8, 255), Voxel.encodeIor(2.5));
 }

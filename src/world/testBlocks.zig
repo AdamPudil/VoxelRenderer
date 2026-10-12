@@ -3,7 +3,7 @@ const std = @import("std");
 /// Create sample assets only when missing. User edits are never overwritten.
 pub fn ensure(allocator: std.mem.Allocator, folder: []const u8) !void {
     try std.fs.cwd().makePath(folder);
-    const samples = [_]struct { stem: []const u8, name: []const u8, variant: u8, color: [3]u8, reflectivity: f32 = 0, metallic: f32 = 0 }{
+    const samples = [_]struct { stem: []const u8, name: []const u8, variant: u8, color: [3]u8, reflectivity: f32 = 0, metallic: f32 = 0, opacity: ?f32 = null, ior: f32 = 1.5 }{
         .{ .stem = "01_red", .name = "Red", .variant = 0, .color = .{ 220, 55, 45 } },
         .{ .stem = "02_green", .name = "Green", .variant = 0, .color = .{ 65, 190, 90 } },
         .{ .stem = "03_blue", .name = "Blue", .variant = 0, .color = .{ 65, 115, 230 } },
@@ -26,6 +26,14 @@ pub fn ensure(allocator: std.mem.Allocator, folder: []const u8) !void {
         .{ .stem = "20_copper", .name = "Copper", .variant = 0, .color = .{ 244, 166, 119 }, .reflectivity = 0.72, .metallic = 1 },
         .{ .stem = "21_iron", .name = "Iron", .variant = 0, .color = .{ 196, 204, 214 }, .reflectivity = 0.55, .metallic = 1 },
         .{ .stem = "22_mirror", .name = "Mirror", .variant = 0, .color = .{ 255, 255, 255 }, .reflectivity = 0.98, .metallic = 0 },
+        .{ .stem = "23_glass_white", .name = "Glass White", .variant = 0, .color = .{ 255, 255, 255 }, .opacity = 0.04 },
+        .{ .stem = "24_glass_red", .name = "Glass Red", .variant = 0, .color = .{ 255, 105, 105 }, .opacity = 0.04 },
+        .{ .stem = "25_glass_green", .name = "Glass Green", .variant = 0, .color = .{ 105, 255, 105 }, .opacity = 0.04 },
+        .{ .stem = "26_glass_blue", .name = "Glass Blue", .variant = 0, .color = .{ 105, 105, 255 }, .opacity = 0.04 },
+        .{ .stem = "27_sanded_glass_white", .name = "Sanded Glass White", .variant = 0, .color = .{ 255, 255, 255 }, .opacity = 0.5 },
+        .{ .stem = "28_sanded_glass_red", .name = "Sanded Glass Red", .variant = 0, .color = .{ 255, 105, 105 }, .opacity = 0.5 },
+        .{ .stem = "29_sanded_glass_green", .name = "Sanded Glass Green", .variant = 0, .color = .{ 105, 255, 105 }, .opacity = 0.5 },
+        .{ .stem = "30_sanded_glass_blue", .name = "Sanded Glass Blue", .variant = 0, .color = .{ 105, 105, 255 }, .opacity = 0.5 },
     };
     for (samples, 0..) |sample, i| {
         const model_path = try std.fmt.allocPrint(allocator, "{s}/{s}.vox", .{ folder, sample.stem });
@@ -43,6 +51,8 @@ pub fn ensure(allocator: std.mem.Allocator, folder: []const u8) !void {
             .model = model_name,
             .reflectivity = sample.reflectivity,
             .metallic = sample.metallic,
+            .opacity = sample.opacity,
+            .ior = sample.ior,
         });
         defer allocator.free(descriptor);
         try writeMissing(descriptor_path, descriptor);

@@ -1,0 +1,8 @@
+format: 2
+name: "Glass Blue"
+variant: 0
+model: "26_glass_blue.vox"
+reflectivity: 0
+metallic: 0
+opacity: 0.04
+ior: 1.5

@@ -70,6 +70,7 @@ pub fn main() !void {
             std.debug.print("Icon {s} v{d}: {d} visible pixels\n", .{ entry.name, entry.variant, visible });
         }
         try checkReflections(a, program, &registry);
+        try checkGlass(a, program, &registry);
         var menu = try Menu.init();
         defer menu.deinit();
         menu.open = true;
@@ -163,4 +164,88 @@ fn checkReflections(a: std.mem.Allocator, program: c_uint, registry: *const Regi
         previous = result;
         std.debug.print("Reflection {s}: {any}\n", .{ name, result });
     }
+}
+
+fn glassPixel(a: std.mem.Allocator, program: c_uint, front: *const @import("world/block.zig").Block, back: ?*const @import("world/block.zig").Block) ![4]u8 {
+    const Block = @import("world/block.zig").Block;
+    const Voxel = @import("world/voxel.zig").Voxel;
+    var world = try @import("world/world.zig").World.init(a);
+    defer world.deinit() catch {};
+    try world.setBlock(.{ 0, 6, 0 }, front);
+    if (back) |model| try world.setBlock(.{ 0, 6, -1 }, model);
+    var target = Voxel.rgb(180, 180, 180);
+    target.luminescence = 255;
+    const backdrop = Block.initMono(0, target);
+    try world.setBlock(.{ 0, 6, -3 }, &backdrop);
+    return scenePixel(&world, program, .{ 8, 104, 48 }, .{ 0, 0, -1 });
+}
+
+fn checkGlass(a: std.mem.Allocator, program: c_uint, registry: *const Registry) !void {
+    const Block = @import("world/block.zig").Block;
+    const Voxel = @import("world/voxel.zig").Voxel;
+    const World = @import("world/world.zig").World;
+    const clear = &registry.blocks.items[registry.find("Glass White", 0).?].model;
+    const sanded = &registry.blocks.items[registry.find("Sanded Glass White", 0).?].model;
+    const red = &registry.blocks.items[registry.find("Glass Red", 0).?].model;
+    const green = &registry.blocks.items[registry.find("Glass Green", 0).?].model;
+    const blue = &registry.blocks.items[registry.find("Glass Blue", 0).?].model;
+    const clear_pixel = try glassPixel(a, program, clear, null);
+    const sanded_pixel = try glassPixel(a, program, sanded, null);
+    const red_pixel = try glassPixel(a, program, red, null);
+    const green_pixel = try glassPixel(a, program, green, null);
+    const blue_pixel = try glassPixel(a, program, blue, null);
+    const mixed = try glassPixel(a, program, red, green);
+    std.debug.print("Glass clear={any} sanded={any} red={any} green={any} blue={any} mixed={any}\n", .{ clear_pixel, sanded_pixel, red_pixel, green_pixel, blue_pixel, mixed });
+    if (clear_pixel[1] < 180 or clear_pixel[3] != 255) return error.GlassDoesNotTransmit;
+    if (@as(u16, sanded_pixel[1]) + 20 >= clear_pixel[1]) return error.SandedGlassNotCloudier;
+    if (red_pixel[0] < @as(u16, red_pixel[1]) + 60 or green_pixel[1] < @as(u16, green_pixel[0]) + 60 or blue_pixel[2] < @as(u16, blue_pixel[0]) + 60) return error.GlassNotTinted;
+    if (mixed[0] >= red_pixel[0] or mixed[1] >= green_pixel[1] or mixed[2] >= @min(red_pixel[2], green_pixel[2])) return error.GlassLayersDoNotMix;
+
+    var world = try World.init(a);
+    defer world.deinit() catch {};
+    var material = Voxel.rgb(255, 255, 255);
+    material.opacity = 0;
+    material.refractive_index = Voxel.encodeIor(1);
+    var glass = Block.initMono(0, material);
+    var red_target = Voxel.rgb(255, 0, 0);
+    var green_target = Voxel.rgb(0, 255, 0);
+    red_target.luminescence = 255;
+    green_target.luminescence = 255;
+    const red_block = Block.initMono(0, red_target);
+    const green_block = Block.initMono(0, green_target);
+    try world.setBlock(.{ 0, 6, 0 }, &glass);
+    try world.setBlock(.{ 0, 6, -3 }, &red_block);
+    try world.setBlock(.{ 1, 6, -3 }, &green_block);
+    const straight = try scenePixel(&world, program, .{ 0, 104, 48 }, .{ 0.205, 0, -1 });
+    glass.blockData.mono.refractive_index = Voxel.encodeIor(1.5);
+    try world.setBlock(.{ 0, 6, 0 }, &glass);
+    const bent = try scenePixel(&world, program, .{ 0, 104, 48 }, .{ 0.205, 0, -1 });
+    std.debug.print("Refraction straight={any} bent={any}\n", .{ straight, bent });
+    if (straight[1] < @as(u16, straight[0]) + 70 or bent[0] < @as(u16, bent[1]) + 70) return error.RefractionDidNotBendRay;
+    // An internal layer with maximal reflectivity must still transmit into its
+    // green target. The camera and target are inside glass, avoiding outer faces.
+    {
+        var internal_world = try World.init(a);
+        defer internal_world.deinit() catch {};
+        try internal_world.setBlock(.{ 0, 6, 0 }, &glass);
+        var second = try clear.clone(a);
+        defer second.deinit(a);
+        var reflective_glass = glass.blockData.mono;
+        reflective_glass.reflectiveness = 255;
+        second.blockData.voxel.setPaletteEntry(1, reflective_glass);
+        second.blockData.voxel.setPaletteEntry(2, green_target);
+        for (0..8) |z| for (0..16) |y| for (0..16) |x| {
+            second.blockData.voxel.setVoxel(x, y, z, 2);
+        };
+        try internal_world.setBlock(.{ 0, 6, -1 }, &second);
+        const internal = try scenePixel(&internal_world, program, .{ 8, 104, 8 }, .{ 0, 0, -1 });
+        std.debug.print("Glass-to-glass transmission={any}\n", .{internal});
+        if (internal[1] < 240 or internal[0] > 5 or internal[2] > 5) return error.InternalGlassBoundaryReflected;
+    }
+    // Camera inside glass: first hit is a supercritical side exit, then the
+    // internally reflected ray leaves the front face toward this green target.
+    try world.setBlock(.{ -1, 6, 2 }, &green_block);
+    const tir = try scenePixel(&world, program, .{ 15, 104, 8 }, .{ 0.5, 0, 0.8660254 });
+    std.debug.print("Total internal reflection={any}\n", .{tir});
+    if (tir[1] < 150 or tir[0] > 60) return error.TotalInternalReflectionFailed;
 }

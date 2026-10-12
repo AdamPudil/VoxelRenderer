@@ -69,7 +69,8 @@ void skipEmptyRegion(vec3 pos, vec3 dir, int size,
     }
 }
 
-bool isAir(VoxelData v) { return v.opacity == 0.0; }
+bool isAir(VoxelData v) { return v.opacity == 0.0 && v.ior == 0.0; }
+bool isGlass(VoxelData v) { return v.ior > 0.0 && v.opacity < 1.0; }
 
 VoxelData sampleMaterial(ivec3 cell, out int regionSize) {
     bool valid;
@@ -87,10 +88,14 @@ VoxelData sampleMaterial(ivec3 cell, out int regionSize) {
 }
 
 bool sameMedium(VoxelData a, VoxelData b) {
-    return isAir(a) && isAir(b);
+    if (isAir(a) && isAir(b)) return true;
+    return isGlass(a) && isGlass(b) && a.ior == b.ior && a.opacity == b.opacity &&
+           all(equal(a.color, b.color)) && a.reflectiveness == b.reflectiveness &&
+           a.metallic == b.metallic && a.luminescence == b.luminescence;
 }
 
-// Find the first surface, with a normal facing the incident ray.
+// Find a medium boundary, skipping internal faces of contiguous glass. Normals
+// always face the incident ray, including glass-to-air exit boundaries.
 bool traceBoundary(vec3 pos, vec3 dir, VoxelData medium, out ivec3 cell,
                    out vec3 normal, out vec3 point, out float distance,
                    out VoxelData material) {
@@ -159,44 +164,105 @@ vec3 reflectionEnvironment(vec3 dir) {
     return vec3(ambient + 0.8 * softbox);
 }
 
-// Opaque surfaces use a bounded chain of specular reflections.
+struct OpticalRay {
+    vec3 pos;
+    vec3 dir;
+    vec3 weight;
+    VoxelData medium;
+    int reflections;
+    int interfaces;
+};
+
+// Deterministic bounded ray tree: transmission and reflection both contribute.
+// Color/opacity are specified per 16 voxels of travel, not per internal voxel face.
 vec4 castReflectedRay(vec3 pos, vec3 dir, out ivec3 hitVoxel,
                      out vec3 hitNormal, out bool hit) {
+    const int maxSegments = 32;
+    const int maxReflections = 6;
+    const int maxInterfaces = 12;
+    OpticalRay pending[16];
+    int count = 1;
+    int region;
+    VoxelData initial = sampleMaterial(ivec3(floor(pos)), region);
+    VoxelData air = decodeVoxel(uvec2(0u));
+    pending[0] = OpticalRay(pos, dir, vec3(1.0), isGlass(initial) ? initial : air, 0, 0);
     vec3 radiance = vec3(0.0);
-    vec3 weight = vec3(1.0);
-    hit = false;
+    hit = isGlass(initial);
     hitVoxel = ivec3(floor(pos));
     hitNormal = vec3(0.0);
-    for (int bounce = 0; bounce <= 6; ++bounce) {
+
+    for (int segment = 0; segment < maxSegments && count > 0; ++segment) {
+        OpticalRay ray = pending[--count];
         ivec3 cell;
         vec3 normal, point;
         float distance;
         VoxelData material;
-        bool found = traceBoundary(pos, dir, decodeVoxel(uvec2(0u)), cell, normal, point, distance, material);
-        if (bounce == 0) {
+        bool found = traceBoundary(ray.pos, ray.dir, ray.medium, cell, normal, point, distance, material);
+        if (segment == 0 && !hit) {
             hit = found;
             hitVoxel = cell;
             hitNormal = normal;
         }
         if (!found) {
-            if (bounce != 0 || !uIconMode) radiance += weight * reflectionEnvironment(dir);
-            break;
+            // A primary icon miss remains transparent; other misses show environment.
+            if (segment != 0 || hit || !uIconMode) radiance += ray.weight * reflectionEnvironment(ray.dir);
+            continue;
         }
-        vec3 local = getShade(material, normal).rgb;
-        if (material.reflectiveness <= 0.0 || dot(normal, normal) == 0.0 || bounce == 6) {
-            radiance += weight * local;
-            break;
+        if (isGlass(ray.medium)) {
+            float thickness = distance / float(BLOCK_SIZE);
+            float transmission = pow(max(1.0 - ray.medium.opacity, 0.00001), thickness);
+            vec3 filterColor = pow(max(ray.medium.color, vec3(0.00001)), vec3(thickness));
+            // Simple haze approximation for sanded glass, not stochastic roughness.
+            radiance += ray.weight * (1.0 - transmission) * ray.medium.color * 0.6;
+            ray.weight *= transmission * filterColor;
         }
-        vec3 f0 = material.reflectiveness * mix(vec3(1.0), material.color, material.metallic);
-        float cosine = clamp(dot(-dir, normal), 0.0, 1.0);
-        vec3 fresnel = f0 + (vec3(1.0) - f0) * pow(1.0 - cosine, 5.0);
-        radiance += weight * (vec3(1.0) - fresnel) * local;
-        weight *= fresnel;
-        if (max(weight.r, max(weight.g, weight.b)) < 0.001) break;
+        if (max(ray.weight.r, max(ray.weight.g, ray.weight.b)) < 0.001) continue;
         float bias = max(0.001, max(abs(point.x), max(abs(point.y), abs(point.z))) * 2.4e-7);
-        pos = point + normal * bias;
-        dir = normalize(reflect(dir, normal));
+        if (!isGlass(material) && !isAir(material)) {
+            vec3 local = getShade(material, normal).rgb;
+            if (material.reflectiveness <= 0.0 || dot(normal, normal) == 0.0 || ray.reflections >= maxReflections) {
+                radiance += ray.weight * local;
+                continue;
+            }
+            vec3 f0 = material.reflectiveness * mix(vec3(1.0), material.color, material.metallic);
+            float cosine = clamp(dot(-ray.dir, normal), 0.0, 1.0);
+            vec3 fresnel = f0 + (vec3(1.0) - f0) * pow(1.0 - cosine, 5.0);
+            radiance += ray.weight * (vec3(1.0) - fresnel) * local;
+            if (count < 16) pending[count++] = OpticalRay(point + normal * bias,
+                normalize(reflect(ray.dir, normal)), ray.weight * fresnel, ray.medium, ray.reflections + 1, ray.interfaces);
+            continue;
+        }
+        if (ray.interfaces >= maxInterfaces || dot(normal, normal) == 0.0) continue;
+        float n1 = isGlass(ray.medium) ? ray.medium.ior : 1.0;
+        float n2 = isGlass(material) ? material.ior : 1.0;
+        vec3 transmitted = refract(ray.dir, normal, n1 / n2);
+        bool totalInternalReflection = dot(transmitted, transmitted) < 1e-8;
+        // Internal glass boundaries only change the transmission medium. Never
+        // branch a reflected ray, even when tint, opacity or reflectivity differs.
+        // Preserve refraction for differing IORs where possible; otherwise keep
+        // travelling straight rather than internally reflecting between glasses.
+        if (isGlass(ray.medium) && isGlass(material)) {
+            if (count < 16) pending[count++] = OpticalRay(point - normal * bias,
+                totalInternalReflection ? ray.dir : normalize(transmitted),
+                ray.weight, material, ray.reflections, ray.interfaces + 1);
+            continue;
+        }
+        float f0 = pow((n1 - n2) / (n1 + n2), 2.0);
+        f0 = max(f0, max(material.reflectiveness, ray.medium.reflectiveness));
+        float cosine = clamp(dot(-ray.dir, normal), 0.0, 1.0);
+        float fresnel = totalInternalReflection ? 1.0 :
+            (n1 == n2 && f0 == 0.0 ? 0.0 : f0 + (1.0 - f0) * pow(1.0 - cosine, 5.0));
+        if (ray.reflections < maxReflections && fresnel > 0.001 && count < 15) {
+            pending[count++] = OpticalRay(point + normal * bias, normalize(reflect(ray.dir, normal)),
+                ray.weight * fresnel, ray.medium, ray.reflections + 1, ray.interfaces + 1);
+        }
+        // Push transmission last, so the principal view is processed first.
+        if (!totalInternalReflection && fresnel < 1.0 && count < 16) {
+            pending[count++] = OpticalRay(point - normal * bias, normalize(transmitted),
+                ray.weight * (1.0 - fresnel), material, ray.reflections, ray.interfaces + 1);
+        }
     }
+    // Scene transmission is already composited here, not by OpenGL alpha blending.
     return vec4(radiance, uIconMode && !hit ? 0.0 : 1.0);
 }
 

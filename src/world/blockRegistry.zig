@@ -110,7 +110,7 @@ test "sample registry has stable IDs, variants, independent models and preserves
     try samples.ensure(a, path);
     var registry = try BlockRegistry.loadDirectory(a, path);
     defer registry.deinit();
-    try std.testing.expectEqual(@as(usize, 22), registry.blocks.items.len);
+    try std.testing.expectEqual(@as(usize, 30), registry.blocks.items.len);
     try std.testing.expectEqual(@as(?u32, 3), registry.find("Checker", 0));
     try std.testing.expectEqual(@as(?u32, 4), registry.find("Checker", 1));
     try std.testing.expect(registry.find("Checker", 2) == null);
