@@ -91,6 +91,7 @@ pub const BlockRegistry = struct {
         const id: u32 = @intCast(self.blocks.items.len);
         var model = try loader.BlockLoader.loadVOXfile(a, model_path, id);
         errdefer model.deinit(a);
+        loader.applyMaterial(&model, meta);
         try self.blocks.ensureUnusedCapacity(1);
         const gop = try self.by_name.getOrPut(name);
         if (!gop.found_existing) gop.value_ptr.* = [_]?u32{null} ** 256;
@@ -109,13 +110,17 @@ test "sample registry has stable IDs, variants, independent models and preserves
     try samples.ensure(a, path);
     var registry = try BlockRegistry.loadDirectory(a, path);
     defer registry.deinit();
-    try std.testing.expectEqual(@as(usize, 18), registry.blocks.items.len);
+    try std.testing.expectEqual(@as(usize, 22), registry.blocks.items.len);
     try std.testing.expectEqual(@as(?u32, 3), registry.find("Checker", 0));
     try std.testing.expectEqual(@as(?u32, 4), registry.find("Checker", 1));
     try std.testing.expect(registry.find("Checker", 2) == null);
     try std.testing.expectEqual(@as(?u32, 15), registry.find("Red", 1));
     try std.testing.expectEqual(@as(?u32, 16), registry.find("Green", 1));
     try std.testing.expectEqual(@as(?u32, 17), registry.find("Blue", 1));
+    for ([_][]const u8{ "Gold", "Copper", "Iron", "Mirror" }, [_]u8{ 217, 184, 140, 250 }) |material_name, expected| {
+        const material = registry.blocks.items[registry.find(material_name, 0).?].model.blockData.voxel;
+        try std.testing.expectEqual(expected, material.getVoxel(0, 0, 0).?.reflectiveness);
+    }
     const white = registry.blocks.items[registry.find("White", 0).?].model.blockData.voxel;
     const black = registry.blocks.items[registry.find("Black", 0).?].model.blockData.voxel;
     try std.testing.expectEqual(@as(u8, 255), white.getVoxel(0, 0, 0).?.r);

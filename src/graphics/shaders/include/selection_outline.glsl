@@ -30,7 +30,7 @@ vec4 shadeSelectionOutline(vec3 dir, ivec3 targetVoxel, int targetValid) {
     ivec3 hitVoxel;
     vec3 normal;
     bool hit;
-    vec4 color = castTraceRay(uCamPos, dir, hitVoxel, normal, hit);
+    vec4 color = castReflectedRay(uCamPos, dir, hitVoxel, normal, hit);
     if (uIconMode || !hit || targetValid == 0 || dot(normal, normal) == 0.0) return color;
     ivec3 lower = uVoxelMode ? targetVoxel : worldToBlockLower(targetVoxel);
     ivec3 hitCell = uVoxelMode ? hitVoxel : worldToBlockLower(hitVoxel);

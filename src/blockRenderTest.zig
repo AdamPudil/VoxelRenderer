@@ -69,6 +69,7 @@ pub fn main() !void {
             if (visible < 30 or visible > 4000) return error.IconMissingModelOrTransparency;
             std.debug.print("Icon {s} v{d}: {d} visible pixels\n", .{ entry.name, entry.variant, visible });
         }
+        try checkReflections(a, program, &registry);
         var menu = try Menu.init();
         defer menu.deinit();
         menu.open = true;
@@ -91,4 +92,75 @@ fn savePreview(a: std.mem.Allocator, path: [*:0]const u8) !void {
     c.glReadPixels(0, 0, 960, 640, c.GL_RGBA, c.GL_UNSIGNED_BYTE, pixels.ptr);
     for (0..640) |y| @memcpy(flipped[y * 3840 ..][0..3840], pixels[(639 - y) * 3840 ..][0..3840]);
     if (c.stbi_write_png(path, 960, 640, 4, flipped.ptr, 3840) == 0) return error.PreviewWriteFailed;
+}
+
+// The target is behind the viewer: it can appear only through a reflected ray.
+fn reflectionPixel(a: std.mem.Allocator, program: c_uint, mirror: *const @import("world/block.zig").Block, target_color: [3]u8, axis: usize, sign: f32) ![4]u8 {
+    const World = @import("world/world.zig").World;
+    const Block = @import("world/block.zig").Block;
+    const Voxel = @import("world/voxel.zig").Voxel;
+    var world = try World.init(a);
+    defer world.deinit() catch {};
+    const base = [3]i32{ -2, 6, -2 };
+    try world.setBlock(base, mirror);
+    var target_position = base;
+    target_position[axis] += if (sign > 0) 4 else -4;
+    var target_material = Voxel.rgb(target_color[0], target_color[1], target_color[2]);
+    target_material.luminescence = 255;
+    const target = Block.initMono(0, target_material);
+    try world.setBlock(target_position, &target);
+    var eye: [3]f32 = undefined;
+    for (0..3) |i| eye[i] = @as(f32, @floatFromInt(base[i] * 16)) + 8;
+    eye[axis] += sign * 32;
+    var direction = [3]f32{ 0, 0, 0 };
+    direction[axis] = -sign;
+    return scenePixel(&world, program, eye, direction);
+}
+
+fn scenePixel(world: *@import("world/world.zig").World, program: c_uint, eye: [3]f32, direction: [3]f32) ![4]u8 {
+    const wc = @import("world/worldConstants.zig");
+    try world.render(eye);
+    world.bindGpuTextures();
+    gl.useProgram(program);
+    gl.uniform1i(gl.getUniformLocation(program, "uIconMode"), 0);
+    const names = [_][*:0]const u8{ "uChunkHeaderTex", "uBlockHeaderTex", "uVoxelBlockHeaderTex", "uBitmapTex", "uPaletteTex", "uIndexTex" };
+    for (names, 0..) |name, unit| gl.uniform1i(gl.getUniformLocation(program, name), @intCast(unit));
+    try gl.uniform2f(gl.getUniformLocation(program, "uResolution"), 65, 65);
+    try gl.uniform3f(gl.getUniformLocation(program, "uCamPos"), eye[0], eye[1], eye[2]);
+    try gl.uniform3f(gl.getUniformLocation(program, "uCamDir"), direction[0], direction[1], direction[2]);
+    const origin = world.gpu_region_origin_chunk;
+    gl.uniform3i(gl.getUniformLocation(program, "uRegionOriginChunk"), origin[0], origin[1], origin[2]);
+    gl.uniform3i(gl.getUniformLocation(program, "uRegionSizeChunks"), wc.STREAM_CHUNKS_XZ, wc.STREAM_CHUNKS_Y, wc.STREAM_CHUNKS_XZ);
+    c.glViewport(0, 0, 65, 65);
+    c.glDrawArrays(c.GL_TRIANGLES, 0, 3);
+    var pixel: [4]u8 = undefined;
+    c.glReadPixels(32, 32, 1, 1, c.GL_RGBA, c.GL_UNSIGNED_BYTE, &pixel);
+    return pixel;
+}
+
+fn checkReflections(a: std.mem.Allocator, program: c_uint, registry: *const Registry) !void {
+    const Block = @import("world/block.zig").Block;
+    const Voxel = @import("world/voxel.zig").Voxel;
+    const mirror = &registry.blocks.items[registry.find("Mirror", 0).?].model;
+    const pixel = try reflectionPixel(a, program, mirror, .{ 0, 255, 0 }, 2, 1);
+    if (pixel[1] < 180 or pixel[0] > 20 or pixel[2] > 20 or pixel[3] != 255) return error.MirrorDidNotReflectScene;
+    const matte = Block.initMono(0, Voxel.rgb(255, 255, 255));
+    const no_reflection = try reflectionPixel(a, program, &matte, .{ 0, 255, 0 }, 2, 1);
+    if (@abs(@as(i32, no_reflection[1]) - no_reflection[0]) > 1) return error.MatteMaterialReflected;
+    var polished = Voxel.rgb(255, 255, 255);
+    polished.reflectiveness = 255;
+    const mono = Block.initMono(0, polished);
+    for (0..3) |axis| for ([_]f32{ -1, 1 }) |sign| {
+        const result = try reflectionPixel(a, program, &mono, .{ 0, 255, 0 }, axis, sign);
+        if (result[1] < 180 or result[0] > 2 or result[2] > 2) return error.ReflectionFaceOrSelfIntersection;
+    };
+    var previous: ?[4]u8 = null;
+    for ([_][]const u8{ "Gold", "Copper", "Iron", "Mirror" }) |name| {
+        const model = &registry.blocks.items[registry.find(name, 0).?].model;
+        const result = try reflectionPixel(a, program, model, .{ 255, 255, 255 }, 2, 1);
+        if (previous) |before| if (std.mem.eql(u8, &before, &result)) return error.MaterialsNotDistinct;
+        if ((std.mem.eql(u8, name, "Gold") or std.mem.eql(u8, name, "Copper")) and result[0] < @as(u16, result[2]) + 30) return error.MetalReflectionNotTinted;
+        previous = result;
+        std.debug.print("Reflection {s}: {any}\n", .{ name, result });
+    }
 }

@@ -11,6 +11,7 @@ struct VoxelData {
     float opacity;
     float reflectiveness;
     float luminescence;
+    float metallic;
 };
 
 struct ChunkHeader {
@@ -147,6 +148,7 @@ VoxelData decodeVoxel(uvec2 voxelPacked) {
     v.opacity        = float((hi >> 0u)  & 0xFFu) / 255.0;
     v.reflectiveness = float((hi >> 8u)  & 0xFFu) / 255.0;
     v.luminescence   = float((hi >> 16u) & 0xFFu) / 255.0;
+    v.metallic = float((hi >> 24u) & 0xFFu) / 255.0;
     return v;
 }
 
@@ -164,6 +166,7 @@ VoxelData voxelFromBlockId(uint blockId) {
     v.opacity = 1.0;
     v.reflectiveness = 0.0;
     v.luminescence = 0.0;
+    v.metallic = 0.0;
 
     if (blockId == 0u) {
         v.color = vec3(0.0);

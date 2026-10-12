@@ -8,7 +8,7 @@ pub const Voxel = packed struct(u64) {
     opacity: u8,
     reflectiveness: u8,
     luminescence: u8,
-    padding: u8,
+    metallic: u8,
 
     pub fn empty() Voxel {
         return .{
@@ -19,7 +19,7 @@ pub const Voxel = packed struct(u64) {
             .opacity = 0,
             .reflectiveness = 0,
             .luminescence = 0,
-            .padding = 0,
+            .metallic = 0,
         };
     }
 
@@ -32,7 +32,7 @@ pub const Voxel = packed struct(u64) {
             .opacity = 255,
             .reflectiveness = 0,
             .luminescence = 0,
-            .padding = 0,
+            .metallic = 0,
         };
     }
 
@@ -53,7 +53,7 @@ pub const Voxel = packed struct(u64) {
             .opacity = opacity,
             .reflectiveness = reflectiveness,
             .luminescence = luminescence,
-            .padding = 0,
+            .metallic = 0,
         };
     }
 

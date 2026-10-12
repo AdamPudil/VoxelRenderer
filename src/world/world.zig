@@ -255,7 +255,7 @@ pub const World = struct {
     }
 
     fn packVoxelHi(v: Voxel) u32 {
-        return (@as(u32, v.opacity)) | (@as(u32, v.reflectiveness) << 8) | (@as(u32, v.luminescence) << 16) | (@as(u32, v.padding) << 24);
+        return (@as(u32, v.opacity)) | (@as(u32, v.reflectiveness) << 8) | (@as(u32, v.luminescence) << 16) | (@as(u32, v.metallic) << 24);
     }
 
     // generation

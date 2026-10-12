@@ -1,0 +1,6 @@
+format: 2
+name: "Gold"
+variant: 0
+model: "19_gold.vox"
+reflectivity: 0.85
+metallic: 1

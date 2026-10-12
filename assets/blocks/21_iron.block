@@ -1,0 +1,6 @@
+format: 2
+name: "Iron"
+variant: 0
+model: "21_iron.vox"
+reflectivity: 0.55
+metallic: 1

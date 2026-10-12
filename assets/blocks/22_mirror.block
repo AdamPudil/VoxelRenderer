@@ -1,0 +1,6 @@
+format: 2
+name: "Mirror"
+variant: 0
+model: "22_mirror.vox"
+reflectivity: 0.98
+metallic: 0

@@ -8,6 +8,10 @@ pub const Metadata = struct {
     variant: u8 = 0,
     model: []const u8,
     icon: ?[]const u8 = null,
+    format: u8 = 1,
+    color: ?[3]u8 = null,
+    reflectivity: f32 = 0,
+    metallic: f32 = 0,
 };
 
 /// Returned slices borrow the descriptor text. Paths are relative to its folder.
@@ -16,7 +20,11 @@ pub fn parseMetadata(text: []const u8) !Metadata {
     var model: ?[]const u8 = null;
     var icon: ?[]const u8 = null;
     var variant: u8 = 0;
-    var seen: u8 = 0;
+    var version: u8 = 1;
+    var color: ?[3]u8 = null;
+    var reflectivity: f32 = 0;
+    var metallic: f32 = 0;
+    var seen: u16 = 0;
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
         const trimmed = std.mem.trim(u8, line, " \t\r");
@@ -25,7 +33,7 @@ pub fn parseMetadata(text: []const u8) !Metadata {
         const key = std.mem.trim(u8, trimmed[0..colon], " \t");
         var value = std.mem.trim(u8, trimmed[colon + 1 ..], " \t");
         if (value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"') value = value[1 .. value.len - 1];
-        const field: u8 = if (std.ascii.eqlIgnoreCase(key, "name") or std.ascii.eqlIgnoreCase(key, "block name")) 1 else if (std.ascii.eqlIgnoreCase(key, "variant")) 2 else if (std.ascii.eqlIgnoreCase(key, "model") or std.ascii.eqlIgnoreCase(key, "model path")) 4 else if (std.ascii.eqlIgnoreCase(key, "icon") or std.ascii.eqlIgnoreCase(key, "icon path")) 8 else return error.UnknownBlockAttribute;
+        const field: u16 = if (std.ascii.eqlIgnoreCase(key, "name") or std.ascii.eqlIgnoreCase(key, "block name")) 1 else if (std.ascii.eqlIgnoreCase(key, "variant")) 2 else if (std.ascii.eqlIgnoreCase(key, "model") or std.ascii.eqlIgnoreCase(key, "model path")) 4 else if (std.ascii.eqlIgnoreCase(key, "icon") or std.ascii.eqlIgnoreCase(key, "icon path")) 8 else if (std.ascii.eqlIgnoreCase(key, "format")) 16 else if (std.ascii.eqlIgnoreCase(key, "color")) 32 else if (std.ascii.eqlIgnoreCase(key, "reflectivity") or std.ascii.eqlIgnoreCase(key, "reflectiveness")) 64 else if (std.ascii.eqlIgnoreCase(key, "metallic")) 128 else return error.UnknownBlockAttribute;
         if (seen & field != 0) return error.DuplicateBlockAttribute;
         seen |= field;
         switch (field) {
@@ -33,11 +41,83 @@ pub fn parseMetadata(text: []const u8) !Metadata {
             2 => variant = std.fmt.parseInt(u8, value, 10) catch return error.InvalidBlockVariant,
             4 => model = value,
             8 => icon = if (value.len == 0) null else value,
+            16 => {
+                version = std.fmt.parseInt(u8, value, 10) catch return error.UnsupportedBlockFormat;
+                if (version != 1 and version != 2) return error.UnsupportedBlockFormat;
+            },
+            32 => {
+                var components = std.mem.tokenizeAny(u8, value, " ,\t");
+                var rgb: [3]u8 = undefined;
+                for (&rgb) |*channel| channel.* = std.fmt.parseInt(u8, components.next() orelse return error.InvalidBlockColor, 10) catch return error.InvalidBlockColor;
+                if (components.next() != null) return error.InvalidBlockColor;
+                color = rgb;
+            },
+            64 => reflectivity = try materialFactor(value),
+            128 => metallic = try materialFactor(value),
             else => unreachable,
         }
     }
     if (name == null or name.?.len == 0 or model == null or model.?.len == 0) return error.MissingBlockAttribute;
-    return .{ .name = name.?, .model = model.?, .variant = variant, .icon = icon };
+    return .{ .name = name.?, .model = model.?, .variant = variant, .icon = icon, .format = version, .color = color, .reflectivity = reflectivity, .metallic = metallic };
+}
+
+fn materialFactor(value: []const u8) !f32 {
+    const n = std.fmt.parseFloat(f32, value) catch return error.InvalidMaterialFactor;
+    if (!std.math.isFinite(n) or n < 0 or n > 1) return error.InvalidMaterialFactor;
+    return n;
+}
+
+/// Canonical engine descriptor. Geometry remains in the referenced VOX file.
+pub fn encodeMetadata(allocator: std.mem.Allocator, meta: Metadata) ![]u8 {
+    if (meta.format != 1 and meta.format != 2) return error.UnsupportedBlockFormat;
+    for ([_][]const u8{ meta.name, meta.model, meta.icon orelse "" }) |value| {
+        if (std.mem.indexOfAny(u8, value, "\r\n\"") != null) return error.InvalidBlockMetadata;
+    }
+    if (meta.name.len == 0 or meta.model.len == 0) return error.MissingBlockAttribute;
+    if (!std.math.isFinite(meta.reflectivity) or meta.reflectivity < 0 or meta.reflectivity > 1 or
+        !std.math.isFinite(meta.metallic) or meta.metallic < 0 or meta.metallic > 1) return error.InvalidMaterialFactor;
+    var text = std.ArrayList(u8).init(allocator);
+    errdefer text.deinit();
+    const w = text.writer();
+    try w.print("format: 2\nname: \"{s}\"\nvariant: {d}\nmodel: \"{s}\"\n", .{ meta.name, meta.variant, meta.model });
+    if (meta.icon) |icon| try w.print("icon: \"{s}\"\n", .{icon});
+    if (meta.color) |rgb| try w.print("color: {d}, {d}, {d}\n", .{ rgb[0], rgb[1], rgb[2] });
+    try w.print("reflectivity: {d}\nmetallic: {d}\n", .{ meta.reflectivity, meta.metallic });
+    return text.toOwnedSlice();
+}
+
+/// Save the descriptor atomically; the referenced model is saved separately.
+pub fn saveMetadata(allocator: std.mem.Allocator, dir: std.fs.Dir, path: []const u8, meta: Metadata) !void {
+    const text = try encodeMetadata(allocator, meta);
+    defer allocator.free(text);
+    var file = try dir.atomicFile(path, .{});
+    defer file.deinit();
+    try file.file.writeAll(text);
+    try file.finish();
+}
+
+/// Override palette material without changing occupancy or emission.
+/// Packed material bytes survive cloning, editing and GPU streaming unchanged.
+pub fn applyMaterial(block: *Block, meta: Metadata) void {
+    switch (block.blockData) {
+        .free => {},
+        .mono => |*voxel| applyVoxelMaterial(voxel, meta),
+        .voxel => |data| {
+            for (&data.pallete) |*voxel| if (!voxel.isEmpty()) {
+                applyVoxelMaterial(voxel, meta);
+            };
+            data.dirty = true;
+        },
+    }
+}
+fn applyVoxelMaterial(voxel: *Voxel, meta: Metadata) void {
+    if (meta.color) |rgb| {
+        voxel.r = rgb[0];
+        voxel.g = rgb[1];
+        voxel.b = rgb[2];
+    }
+    voxel.reflectiveness = @intFromFloat(@round(meta.reflectivity * 255));
+    voxel.metallic = @intFromFloat(@round(meta.metallic * 255));
 }
 
 fn u32le(bytes: []const u8, offset: usize) !u32 {
@@ -107,7 +187,7 @@ pub const BlockLoader = struct {
                 has_palette = true;
                 for (1..256) |i| {
                     const rgba = data[(i - 1) * 4 ..][0..4];
-                    palette[i] = Voxel.getVoxel(rgba[0], rgba[1], rgba[2], 255 - rgba[3], rgba[3], 0, 0);
+                    palette[i] = Voxel.getVoxel(rgba[0], rgba[1], rgba[2], 0, rgba[3], 0, 0);
                 }
             } else if (std.mem.eql(u8, tag, "PACK")) {
                 if (size != 4 or try u32le(data, 0) != 1) return error.MultipleVoxModels;
@@ -144,4 +224,59 @@ test "metadata fields, aliases, optional icon, and invalid definitions" {
     try std.testing.expectError(error.InvalidBlockVariant, parseMetadata("name: x\nmodel: a.vox\nvariant: 256"));
     try std.testing.expectError(error.DuplicateBlockAttribute, parseMetadata("name: x\nName: y\nmodel: a.vox"));
     try std.testing.expectError(error.MissingBlockAttribute, parseMetadata("name: x"));
+}
+
+test "versioned material descriptors roundtrip and reject invalid values" {
+    const a = std.testing.allocator;
+    const material = try parseMetadata("format: 2\nname: Gold\nmodel: gold.vox\ncolor: 255, 209, 112\nreflectivity: 0.85\nmetallic: 1\n");
+    const encoded = try encodeMetadata(a, material);
+    defer a.free(encoded);
+    const decoded = try parseMetadata(encoded);
+    try std.testing.expectEqual(@as(u8, 2), decoded.format);
+    try std.testing.expectEqual(material.color, decoded.color);
+    try std.testing.expectEqual(material.reflectivity, decoded.reflectivity);
+    try std.testing.expectEqual(material.metallic, decoded.metallic);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try saveMetadata(a, tmp.dir, "gold.block", material);
+    const saved = try tmp.dir.readFileAlloc(a, "gold.block", 4096);
+    defer a.free(saved);
+    try std.testing.expectEqualStrings(encoded, saved);
+    const legacy = try parseMetadata("name: Old\nmodel: old.vox\n");
+    try std.testing.expectEqual(@as(f32, 0), legacy.reflectivity);
+    try std.testing.expect(legacy.color == null);
+    for ([_][]const u8{ "nan", "inf", "-0.1", "1.01", "abc" }) |value| {
+        const text = try std.fmt.allocPrint(a, "name: Invalid\nmodel: a.vox\nreflectivity: {s}\n", .{value});
+        defer a.free(text);
+        try std.testing.expectError(error.InvalidMaterialFactor, parseMetadata(text));
+    }
+    try std.testing.expectError(error.DuplicateBlockAttribute, parseMetadata("name: x\nmodel: a.vox\nreflectivity: 0.5\nreflectiveness: 0.8"));
+    try std.testing.expectError(error.UnsupportedBlockFormat, parseMetadata("name: x\nmodel: a.vox\nformat: 3"));
+    try std.testing.expectError(error.InvalidBlockColor, parseMetadata("name: x\nmodel: a.vox\ncolor: 256, 0, 0"));
+    try std.testing.expectError(error.InvalidBlockColor, parseMetadata("name: x\nmodel: a.vox\ncolor: 1, 2"));
+    try std.testing.expectError(error.InvalidMaterialFactor, parseMetadata("name: x\nmodel: a.vox\nmetallic: 2"));
+}
+
+test "material palette overrides preserve geometry and survive copies" {
+    const a = std.testing.allocator;
+    const bytes = try @import("testBlocks.zig").encodeSample(a, 5, .{ 1, 2, 3 });
+    defer a.free(bytes);
+    var block = try BlockLoader.decodeVox(a, bytes, 1);
+    defer block.deinit(a);
+    const before = block.blockData.voxel.solid_count;
+    const material = Metadata{ .name = "Metal", .model = "a.vox", .color = .{ 255, 209, 112 }, .reflectivity = 0.85, .metallic = 1 };
+    applyMaterial(&block, material);
+    var clone = try block.clone(a);
+    defer clone.deinit(a);
+    const v = clone.blockData.voxel.getVoxel(0, 0, 0).?;
+    try std.testing.expectEqual(@as(u8, 217), v.reflectiveness);
+    try std.testing.expectEqual(@as(u8, 255), v.metallic);
+    try std.testing.expectEqual(@as(u8, 209), v.g);
+    try std.testing.expectEqual(@as(u8, 255), v.opacity);
+    try std.testing.expectEqual(before, clone.blockData.voxel.solid_count);
+    try std.testing.expect(!clone.blockData.voxel.isOccupied(8, 8, 8));
+    var mono = Block.initMono(2, Voxel.rgb(1, 2, 3));
+    applyMaterial(&mono, material);
+    try std.testing.expectEqual(v, mono.blockData.mono);
+    try std.testing.expectEqual(@as(usize, 8), @sizeOf(Voxel));
 }

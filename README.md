@@ -55,7 +55,7 @@ Run `zig build run` from the repository root. Startup creates missing
 sample `.block` descriptors and MagicaVoxel `.vox` models in `assets/blocks`:
 red, green, blue, white, black, yellow, orange, purple, cyan, pink, gray, brown,
 lighter red/green/blue variants, coarse checkerboard, fine checkerboard, and an
-open frame (18 entries total).
+open frame, gold, copper, iron, and mirror (22 entries total).
 Existing sample files are preserved. Use `--assets=some/directory` to choose a
 different block folder (the samples are created there too).
 
@@ -96,6 +96,40 @@ keys are case-insensitive. `variant` defaults to 0 and must fit in a `u8`.
 Blank lines and full-line `#` comments are supported. Values may be quoted.
 Names are case-sensitive, and `(name, variant)` pairs must be unique. Paths are
 relative to the descriptor's directory. Custom icons must be PNG files.
+
+Reflective blocks use the extended, backward-compatible `.block` format:
+
+```text
+format: 2
+name: Gold
+variant: 0
+model: 19_gold.vox
+color: 255, 209, 112
+reflectivity: 0.85
+metallic: 1
+```
+
+`color` optionally overrides occupied voxel RGB (three integers 0–255); omitting
+it preserves the model palette. `reflectivity` and `metallic` are finite numbers
+from 0 to 1, defaulting to zero. `reflectiveness` is an alias for `reflectivity`.
+Metallic controls reflection tint: 0 reflects neutral scene colors, 1 tints with
+the voxel color. `format` may be omitted for legacy descriptors; versions 1 and 2
+are accepted. Invalid/duplicate fields fail loading with a diagnostic.
+`blockLoader.encodeMetadata` writes canonical version 2 descriptors;
+`saveMetadata` saves them atomically. Geometry stays in the referenced `.vox`.
+This saves block definitions, not world placements.
+
+| Block | Reflectivity | Metallic |
+| --- | --- | --- |
+| Gold | 0.85 | 1 |
+| Copper | 0.72 | 1 |
+| Iron | 0.55 | 1 |
+| Mirror | 0.98 | 0 |
+
+These are artistic polished-surface presets, not measured optical constants.
+
+Reflections use up to six bounces, with local shading at the final hit.
+Only loaded geometry participates; misses use the sky or an icon studio environment.
 
 The registry stores definitions in an array indexed by numeric ID, plus a name
 hash map with variant slots. IDs are assigned from sorted descriptor filenames,

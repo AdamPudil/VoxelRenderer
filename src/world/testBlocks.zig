@@ -3,7 +3,7 @@ const std = @import("std");
 /// Create sample assets only when missing. User edits are never overwritten.
 pub fn ensure(allocator: std.mem.Allocator, folder: []const u8) !void {
     try std.fs.cwd().makePath(folder);
-    const samples = [_]struct { stem: []const u8, name: []const u8, variant: u8, color: [3]u8 }{
+    const samples = [_]struct { stem: []const u8, name: []const u8, variant: u8, color: [3]u8, reflectivity: f32 = 0, metallic: f32 = 0 }{
         .{ .stem = "01_red", .name = "Red", .variant = 0, .color = .{ 220, 55, 45 } },
         .{ .stem = "02_green", .name = "Green", .variant = 0, .color = .{ 65, 190, 90 } },
         .{ .stem = "03_blue", .name = "Blue", .variant = 0, .color = .{ 65, 115, 230 } },
@@ -22,6 +22,10 @@ pub fn ensure(allocator: std.mem.Allocator, folder: []const u8) !void {
         .{ .stem = "16_light_red", .name = "Red", .variant = 1, .color = .{ 255, 130, 125 } },
         .{ .stem = "17_light_green", .name = "Green", .variant = 1, .color = .{ 145, 225, 160 } },
         .{ .stem = "18_light_blue", .name = "Blue", .variant = 1, .color = .{ 135, 185, 255 } },
+        .{ .stem = "19_gold", .name = "Gold", .variant = 0, .color = .{ 255, 209, 112 }, .reflectivity = 0.85, .metallic = 1 },
+        .{ .stem = "20_copper", .name = "Copper", .variant = 0, .color = .{ 244, 166, 119 }, .reflectivity = 0.72, .metallic = 1 },
+        .{ .stem = "21_iron", .name = "Iron", .variant = 0, .color = .{ 196, 204, 214 }, .reflectivity = 0.55, .metallic = 1 },
+        .{ .stem = "22_mirror", .name = "Mirror", .variant = 0, .color = .{ 255, 255, 255 }, .reflectivity = 0.98, .metallic = 0 },
     };
     for (samples, 0..) |sample, i| {
         const model_path = try std.fmt.allocPrint(allocator, "{s}/{s}.vox", .{ folder, sample.stem });
@@ -31,7 +35,15 @@ pub fn ensure(allocator: std.mem.Allocator, folder: []const u8) !void {
         try writeMissing(model_path, model);
         const descriptor_path = try std.fmt.allocPrint(allocator, "{s}/{s}.block", .{ folder, sample.stem });
         defer allocator.free(descriptor_path);
-        const descriptor = try std.fmt.allocPrint(allocator, "name: {s}\nvariant: {d}\nmodel: {s}.vox\n# Omit icon to render a 64x64 PNG with the engine.\n", .{ sample.name, sample.variant, sample.stem });
+        const model_name = try std.fmt.allocPrint(allocator, "{s}.vox", .{sample.stem});
+        defer allocator.free(model_name);
+        const descriptor = try @import("blockLoader.zig").encodeMetadata(allocator, .{
+            .name = sample.name,
+            .variant = sample.variant,
+            .model = model_name,
+            .reflectivity = sample.reflectivity,
+            .metallic = sample.metallic,
+        });
         defer allocator.free(descriptor);
         try writeMissing(descriptor_path, descriptor);
     }
