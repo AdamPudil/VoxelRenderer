@@ -9,6 +9,7 @@ vec3 getRay(vec2 fragCoord) {
     float aspect = uResolution.x / uResolution.y;
     vec2 p = (fragCoord / uResolution) * 2.0 - 1.0;
     p.x *= aspect;
+    if (uIconMode) p *= 0.45;
 
     vec3 forward = normalize(uCamDir);
 
@@ -39,85 +40,53 @@ vec4 getShade(VoxelData voxel, vec3 normal) {
     return vec4(lit, voxel.opacity);
 }
 
-void skipEmptyChunk(
-    inout ivec3 v,
-    inout vec3 tMax,
-    vec3 tDelta,
-    vec3 stepDir,
-    inout vec3 normal
-) {
-    ivec3 lp = worldToLocalVoxelInChunk(v);
-
-    int sx = (stepDir.x > 0.0) ? (CHUNK_VOXEL_SIZE - 1 - lp.x) : lp.x;
-    int sy = (stepDir.y > 0.0) ? (CHUNK_VOXEL_SIZE - 1 - lp.y) : lp.y;
-    int sz = (stepDir.z > 0.0) ? (CHUNK_VOXEL_SIZE - 1 - lp.z) : lp.z;
-
-    float tx = tMax.x + float(sx) * tDelta.x;
-    float ty = tMax.y + float(sy) * tDelta.y;
-    float tz = tMax.z + float(sz) * tDelta.z;
-
-    if (tx < ty && tx < tz) {
-        v.x += int(stepDir.x) * (sx + 1);
-        tMax.x += float(sx + 1) * tDelta.x;
-        normal = vec3(-stepDir.x, 0.0, 0.0);
-    } else if (ty < tz) {
-        v.y += int(stepDir.y) * (sy + 1);
-        tMax.y += float(sy + 1) * tDelta.y;
-        normal = vec3(0.0, -stepDir.y, 0.0);
-    } else {
-        v.z += int(stepDir.z) * (sz + 1);
-        tMax.z += float(sz + 1) * tDelta.z;
-        normal = vec3(0.0, 0.0, -stepDir.z);
+// Advance every coordinate to the ray's exit from an empty region.
+// Updating only the exit axis leaves the other coordinates behind the ray.
+void skipEmptyRegion(vec3 pos, vec3 dir, int size,
+                     inout ivec3 v, inout vec3 tMax,
+                     vec3 stepDir, inout vec3 normal) {
+    ivec3 lower = ivec3(floor(vec3(v) / float(size))) * size;
+    ivec3 upper = lower + ivec3(size);
+    vec3 boundary = mix(vec3(lower), vec3(upper), greaterThan(dir, vec3(0.0)));
+    vec3 exitTimes = vec3(1e30);
+    for (int axis = 0; axis < 3; axis++) {
+        if (dir[axis] != 0.0) exitTimes[axis] = (boundary[axis] - pos[axis]) / dir[axis];
+    }
+    int axis = exitTimes.x < exitTimes.y ? 0 : 1;
+    if (exitTimes.z < exitTimes[axis]) axis = 2;
+    float t = exitTimes[axis];
+    v = ivec3(floor(pos + dir * t));
+    // Exact boundary ownership, including negative rays and corner ties.
+    for (int i = 0; i < 3; i++) {
+        if (exitTimes[i] == t) v[i] = dir[i] > 0.0 ? upper[i] : lower[i] - 1;
+    }
+    normal = vec3(0.0);
+    normal[axis] = -stepDir[axis];
+    vec3 next = vec3(v) + max(stepDir, vec3(0.0));
+    tMax = vec3(1e30);
+    for (int i = 0; i < 3; i++) {
+        if (dir[i] != 0.0) tMax[i] = (next[i] - pos[i]) / dir[i];
     }
 }
 
-void skipEmptyBlock(
-    inout ivec3 v,
-    inout vec3 tMax,
-    vec3 tDelta,
-    vec3 stepDir,
-    inout vec3 normal
-) {
-    ivec3 lpChunk = worldToLocalVoxelInChunk(v);
-    ivec3 lv = localChunkVoxelToVoxelInBlock(lpChunk);
-
-    int sx = (stepDir.x > 0.0) ? (BLOCK_SIZE - 1 - lv.x) : lv.x;
-    int sy = (stepDir.y > 0.0) ? (BLOCK_SIZE - 1 - lv.y) : lv.y;
-    int sz = (stepDir.z > 0.0) ? (BLOCK_SIZE - 1 - lv.z) : lv.z;
-
-    float tx = tMax.x + float(sx) * tDelta.x;
-    float ty = tMax.y + float(sy) * tDelta.y;
-    float tz = tMax.z + float(sz) * tDelta.z;
-
-    if (tx < ty && tx < tz) {
-        v.x += int(stepDir.x) * (sx + 1);
-        tMax.x += float(sx + 1) * tDelta.x;
-        normal = vec3(-stepDir.x, 0.0, 0.0);
-    } else if (ty < tz) {
-        v.y += int(stepDir.y) * (sy + 1);
-        tMax.y += float(sy + 1) * tDelta.y;
-        normal = vec3(0.0, -stepDir.y, 0.0);
-    } else {
-        v.z += int(stepDir.z) * (sz + 1);
-        tMax.z += float(sz + 1) * tDelta.z;
-        normal = vec3(0.0, 0.0, -stepDir.z);
-    }
-}
-
-vec4 castTraceRay(vec3 pos, vec3 dir) {
+vec4 castTraceRay(vec3 pos, vec3 dir, out ivec3 hitVoxel,
+                  out vec3 hitNormal, out bool hit) {
+    hit = false;
+    hitVoxel = ivec3(0);
+    hitNormal = vec3(0.0);
     ivec3 v = ivec3(floor(pos));
 
     vec3 stepDir = sign(dir);
 
-    vec3 safeDir = vec3(
-        abs(dir.x) < 0.0001 ? (dir.x < 0.0 ? -0.0001 : 0.0001) : dir.x,
-        abs(dir.y) < 0.0001 ? (dir.y < 0.0 ? -0.0001 : 0.0001) : dir.y,
-        abs(dir.z) < 0.0001 ? (dir.z < 0.0 ? -0.0001 : 0.0001) : dir.z
-    );
-
-    vec3 tDelta = abs(1.0 / safeDir);
-    vec3 next = floor(pos) + stepDir * 0.5 + 0.5;
-    vec3 tMax = (next - pos) / safeDir;
+    vec3 tDelta = vec3(1e30);
+    vec3 tMax = vec3(1e30);
+    vec3 next = floor(pos) + max(stepDir, vec3(0.0));
+    for (int axis = 0; axis < 3; axis++) {
+        if (dir[axis] != 0.0) {
+            tDelta[axis] = abs(1.0 / dir[axis]);
+            tMax[axis] = (next[axis] - pos[axis]) / dir[axis];
+        }
+    }
 
     vec3 normal = vec3(0.0);
 
@@ -127,28 +96,37 @@ vec4 castTraceRay(vec3 pos, vec3 dir) {
         ChunkHeader ch = chunkHeaderAtWorld(v, chunkValid, slot);
 
         if (!chunkValid || ch.state == uint(CHUNK_STATE_FREE)) {
-            skipEmptyChunk(v, tMax, tDelta, stepDir, normal);
+            skipEmptyRegion(pos, dir, CHUNK_VOXEL_SIZE, v, tMax, stepDir, normal);
             continue;
         }
 
         if (ch.state == uint(CHUNK_STATE_MONO)) {
+            hit = true;
+            hitVoxel = v;
+            hitNormal = normal;
             return getShade(decodeVoxel(uvec2(ch.data0, ch.data1)), normal);
         }
 
         BlockHeader bh = blockHeaderAtWorld(v, ch);
 
         if (bh.state == uint(BLOCK_STATE_FREE)) {
-            skipEmptyBlock(v, tMax, tDelta, stepDir, normal);
+            skipEmptyRegion(pos, dir, BLOCK_SIZE, v, tMax, stepDir, normal);
             continue;
         }
 
         if (bh.state == uint(BLOCK_STATE_MONO)) {
+            hit = true;
+            hitVoxel = v;
+            hitNormal = normal;
             return getShade(decodeVoxel(uvec2(bh.data0, bh.data1)), normal);
         }
 
         if (voxelPresentAtWorld(v, bh)) {
             VoxelData voxel = voxelAtWorld(v, bh);
             if (voxel.opacity > 0.0) {
+                hit = true;
+                hitVoxel = v;
+                hitNormal = normal;
                 return getShade(voxel, normal);
             }
         }
@@ -168,7 +146,7 @@ vec4 castTraceRay(vec3 pos, vec3 dir) {
         }
     }
 
-    return skyColor;
+    return uIconMode ? vec4(0.0) : skyColor;
 }
 
 #endif

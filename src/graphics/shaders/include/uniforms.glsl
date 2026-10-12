@@ -1,6 +1,8 @@
 #ifndef UNIFORMS
 #define UNIFORMS
 
+uniform bool uIconMode;
+uniform bool uVoxelMode;
 uniform vec2 uResolution;
 uniform vec3 uCamPos;
 uniform vec3 uCamDir;

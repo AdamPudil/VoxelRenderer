@@ -34,6 +34,15 @@ struct VoxelBlockHeader {
     uint info;
 };
 
+// Align to the storage block grid, including negative world coordinates.
+ivec3 worldToBlockLower(ivec3 wp) {
+    return wp - ivec3(
+        positiveMod(wp.x, BLOCK_SIZE),
+        positiveMod(wp.y, BLOCK_SIZE),
+        positiveMod(wp.z, BLOCK_SIZE)
+    );
+}
+
 ivec3 worldToChunkCoord(ivec3 wp) {
     return ivec3(
         floorDiv(wp.x, CHUNK_VOXEL_SIZE),

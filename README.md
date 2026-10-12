@@ -48,3 +48,93 @@ The desktop profile initially shares traversal and world-data code with the
 ThinkPad profile. It is a starting point for separate desktop shader development;
 it does not yet introduce RTX-specific acceleration, increase the VRAM budget,
 or promise faster rendering. Changing the GLSL version alone is not an optimization.
+
+## Block models, icons and building
+
+Run `zig build run` from the repository root. Startup creates missing
+sample `.block` descriptors and MagicaVoxel `.vox` models in `assets/blocks`:
+red, green, blue, white, black, yellow, orange, purple, cyan, pink, gray, brown,
+lighter red/green/blue variants, coarse checkerboard, fine checkerboard, and an
+open frame (18 entries total).
+Existing sample files are preserved. Use `--assets=some/directory` to choose a
+different block folder (the samples are created there too).
+
+- **Tab** opens/closes the block menu and releases/captures the cursor.
+- Click an icon to select it. Click it again, right-click in the menu, or choose
+  **Empty hand** to deselect. **Prev/Next** navigate larger collections.
+- **Esc** closes the menu; in normal gameplay it exits.
+- With a block selected, **right mouse** places a copy in the adjacent block
+  cell on the face hit by the center-screen ray.
+- **Left mouse** removes the entire block containing the hit voxel by default,
+  including with an empty hand. No selected block is needed for removal.
+- **V** toggles left-click removal between a whole 16×16×16 block and just the
+  targeted voxel. The HUD displays the current mode; holding V toggles only once.
+  Release the mouse after switching modes. Right-click always places whole blocks.
+  Voxel deletion also works on the solid floor/walls and preserves neighboring
+  voxels. The black outline follows the mode: the targeted block in block mode, or
+  the targeted voxel in voxel mode.
+- Holding a mouse button repeats at most once per 0.20 seconds and six frames.
+  Menu clicks cannot edit the world. Release both buttons after closing it.
+- Editing reaches 256 voxels. Placement requires an empty, loaded block cell
+  and cannot put a block around the camera. Movement pauses while the menu is open.
+
+Edits survive streaming/rebuilding during the current session. World saving to
+disk is not implemented; edits reset on restart.
+
+A descriptor is a UTF-8 text file with a `.block` extension:
+
+```text
+name: Checker
+variant: 0
+model: checker.vox
+# Optional; omit (or leave empty) to generate from the model:
+# icon: icons/my_checker.png
+```
+
+`Block name`, `model path`, and `icon path` are also accepted as attribute names;
+keys are case-insensitive. `variant` defaults to 0 and must fit in a `u8`.
+Blank lines and full-line `#` comments are supported. Values may be quoted.
+Names are case-sensitive, and `(name, variant)` pairs must be unique. Paths are
+relative to the descriptor's directory. Custom icons must be PNG files.
+
+The registry stores definitions in an array indexed by numeric ID, plus a name
+hash map with variant slots. IDs are assigned from sorted descriptor filenames,
+so they are deterministic for an unchanged asset set, not persistent save IDs.
+`BlockRegistry.find(name, variant)` resolves a definition's ID. Each placed model
+is a deep copy; editing it does not mutate the registry or other placements.
+
+Supported models contain one raw MagicaVoxel model (VOX version 150 or 200), at
+most 16×16×16 voxels. Smaller models are padded with empty space at the positive
+ends of the block. Z-up data is converted to Y-up while preserving handedness.
+Explicit and default palettes are supported. Scene transforms and extended
+material properties are not applied; multiple models are rejected. The future
+custom model format is not implemented. Parser layout follows the
+[MagicaVoxel format specification](https://github.com/ephtracy/voxel-model/blob/master/MagicaVoxel-file-format-vox.txt).
+
+Missing `icon` attributes produce transparent 64×64 PNGs in
+`assets/blocks/icons/<descriptor-stem>.png` (or the chosen asset folder).
+They use the engine's world shader, a three-quarter camera showing three sides,
+and supersampling. Generated icons are refreshed at startup; explicit icon
+files are loaded as supplied. The generated PNGs can be reused by a future inventory.
+
+Validation:
+
+```sh
+zig build test          # parser, registry, world edits, ray hits, menu, cooldown
+zig build test-render   # optional headless Mesa/EGL icon and menu integration
+```
+
+`test-render` requires EGL development files and Mesa software rendering. It
+checks both shader profiles and writes previews to `/tmp/voxel-block-smoke/`.
+Normal builds continue to use GL, GLFW and GLEW. PNG loading uses the vendored
+[stb_image](https://github.com/nothings/stb) implementation and existing PNG writer.
+
+## Startup building
+
+A matte gray building starts at block X=0, Z=0 and extends through X/Z=15:
+a **16×16-block exterior**, one-block walls, and a **14×14×4-block clear interior**.
+The reddish-brown floor occupies Y=-1 (top at world Y=0); walls occupy Y=0–3
+and the gray roof Y=4. A 2-wide, 3-high doorway is centered on the negative-Z
+side. The default camera starts inside. The building uses ordinary editable,
+opaque, nonreflective blocks and is recreated on startup, like the rest of the
+unsaved world.

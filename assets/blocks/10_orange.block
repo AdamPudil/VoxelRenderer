@@ -1,0 +1,4 @@
+name: Orange
+variant: 0
+model: 10_orange.vox
+# Omit icon to render a 64x64 PNG with the engine.
