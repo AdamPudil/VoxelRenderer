@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) void {
     tests.linkSystemLibrary("GL");
     tests.linkSystemLibrary("GLEW");
     tests.addIncludePath(b.path("libs/c/stb"));
-    const test_step = b.step("test", "Test blocks, input and event queues");
+    const test_step = b.step("test", "Test blocks, input, cameras and event queues");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
     const input_tests = b.addTest(.{ .root_source_file = b.path("src/inputTests.zig"), .target = target, .optimize = optimize });
@@ -41,6 +41,12 @@ pub fn build(b: *std.Build) void {
     const run_input_tests = b.addRunArtifact(input_tests);
     b.step("test-input", "Test input mapping and current-frame event delivery").dependOn(&run_input_tests.step);
     test_step.dependOn(&run_input_tests.step);
+
+    const camera_tests = b.addTest(.{ .root_source_file = b.path("src/cameraTests.zig"), .target = target, .optimize = optimize });
+    camera_tests.linkLibC();
+    const run_camera_tests = b.addRunArtifact(camera_tests);
+    b.step("test-camera", "Test camera registry, validation and resolved snapshots").dependOn(&run_camera_tests.step);
+    test_step.dependOn(&run_camera_tests.step);
 
     const render_test = b.addExecutable(.{ .name = "block-render-test", .root_source_file = b.path("src/blockRenderTest.zig"), .target = target, .optimize = optimize });
     render_test.linkLibC();

@@ -22,6 +22,7 @@ pub const EventConsumer = enum {
     UI,
     input,
     inventory,
+    camera,
 };
 
 pub const EventTypeDescriptor = struct {

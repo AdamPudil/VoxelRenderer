@@ -12,6 +12,7 @@ const Block = @import("world/block.zig").Block;
 const wc = @import("world/worldConstants.zig");
 const input = @import("core/input/inputSystem.zig");
 const InputBackend = @import("core/input/glfwBackend.zig").Backend;
+const CameraSystem = @import("core/camera/cameraSystem.zig").CameraSystem;
 
 const c = @cImport({
     @cInclude("GL/glew.h");
@@ -152,6 +153,8 @@ pub fn main() !void {
         _ = try event_bus.submit("input", input.Command{ .apply_profile = .{ .request_id = 1, .profile = bindings } });
     }
     var input_system = input.InputSystem{ .bus = event_bus };
+    var camera_system = CameraSystem.init(allocator);
+    defer camera_system.deinit();
     var input_backend = InputBackend{ .window = @ptrCast(window) };
     input_backend.attach();
     defer input_backend.detach();
@@ -180,6 +183,7 @@ pub fn main() !void {
         controls.height = @floatFromInt(window_height);
         controls.block_count = registry.blocks.items.len;
         try input.routing.drainForDeveloperTools(event_bus, &controls);
+        _ = try camera_system.processCurrent(event_bus);
         event_bus.clearCurrent();
         // Retire the current frame; next/debt buffers remain intact.
         if (controls.quit) break;

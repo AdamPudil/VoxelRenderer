@@ -1,4 +1,5 @@
 const input = @import("../input/types.zig");
+const camera = @import("../camera/types.zig");
 const eventDescriptor = @import("eventDescriptor.zig").EventDescriptor;
 const typeDescriptor = @import("eventDescriptor.zig").EventTypeDescriptor;
 const onFull = @import("eventDescriptor.zig").EventQueueOnFull;
@@ -123,6 +124,7 @@ pub const typeTable: []const typeDescriptor = &.{
                 .name = "Resume",
                 .dataType = void,
             },
+            .{ .id = 4, .name = "camera_result", .dataType = camera.Result },
         },
     },
     typeDescriptor{
@@ -142,6 +144,7 @@ pub const typeTable: []const typeDescriptor = &.{
             },
             .{ .id = 1, .name = "screenshot", .dataType = input.ActionEvent },
             .{ .id = 2, .name = "toggle_fps", .dataType = input.ActionEvent },
+            .{ .id = 3, .name = "camera_result", .dataType = camera.Result },
         },
     },
     typeDescriptor{
@@ -176,6 +179,7 @@ pub const typeTable: []const typeDescriptor = &.{
             },
             .{ .id = 4, .name = "move", .dataType = EntityMoveData },
             .{ .id = 5, .name = "look", .dataType = EntityLookData },
+            .{ .id = 6, .name = "camera_result", .dataType = camera.Result },
         },
     },
     typeDescriptor{
@@ -211,6 +215,7 @@ pub const typeTable: []const typeDescriptor = &.{
             .{ .id = 4, .name = "remove", .dataType = WorldEditInputData },
             .{ .id = 5, .name = "place", .dataType = WorldEditInputData },
             .{ .id = 6, .name = "toggle_removal", .dataType = WorldEditInputData },
+            .{ .id = 7, .name = "camera_result", .dataType = camera.Result },
         },
     },
     typeDescriptor{
@@ -284,6 +289,7 @@ pub const typeTable: []const typeDescriptor = &.{
             .{ .id = 7, .name = "command_result", .dataType = input.Result },
             .{ .id = 8, .name = "bindings_snapshot", .dataType = input.BindingState },
             .{ .id = 9, .name = "rebind_candidate", .dataType = input.Candidate },
+            .{ .id = 10, .name = "camera_result", .dataType = camera.Result },
         },
     },
     typeDescriptor{
@@ -305,6 +311,20 @@ pub const typeTable: []const typeDescriptor = &.{
             .{ .id = 6, .name = "query_bindings", .dataType = input.Request },
             .{ .id = 7, .name = "begin_rebind", .dataType = input.Rebind },
             .{ .id = 8, .name = "cancel_rebind", .dataType = u64 },
+        },
+    },
+    .{
+        .id = 8,
+        .prio = 1,
+        .name = "camera",
+        .consumer = .camera,
+        .queueMsgSize = 256,
+        .onFull = .{ .action = .debt_queue },
+        .events = &.{
+            .{ .id = 0, .name = "create", .dataType = camera.Create },
+            .{ .id = 1, .name = "destroy", .dataType = camera.Destroy },
+            .{ .id = 2, .name = "set_transform", .dataType = camera.SetTransform },
+            .{ .id = 3, .name = "set_fov", .dataType = camera.SetFov },
         },
     },
 };
