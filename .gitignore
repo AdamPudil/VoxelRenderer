@@ -7,3 +7,15 @@ zig-out/
 fps_log.txt
 
 *.pgm
+# Block icons are generated from the models on startup.
+assets/blocks/icons/
+
+# Runtime logs and generated test output
+/logs/
+/testOut/
+
+# Timestamped application screenshots
+/screenshots/screenshot_*
+
+# Local source archive
+/src.zip
