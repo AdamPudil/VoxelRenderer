@@ -1,6 +1,7 @@
 test {
     _ = @import("core/logging/logging.zig");
     _ = @import("core/events/event.zig");
+    _ = @import("core/events/queue.zig");
 }
 
 test "Procedural generation" {

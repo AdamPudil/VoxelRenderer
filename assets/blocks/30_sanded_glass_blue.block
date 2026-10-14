@@ -1,0 +1,8 @@
+format: 2
+name: "Sanded Glass Blue"
+variant: 0
+model: "30_sanded_glass_blue.vox"
+reflectivity: 0
+metallic: 0
+opacity: 0.5
+ior: 1.5

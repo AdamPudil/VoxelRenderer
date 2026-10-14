@@ -1,0 +1,8 @@
+format: 2
+name: "Sanded Glass Green"
+variant: 0
+model: "29_sanded_glass_green.vox"
+reflectivity: 0
+metallic: 0
+opacity: 0.5
+ior: 1.5

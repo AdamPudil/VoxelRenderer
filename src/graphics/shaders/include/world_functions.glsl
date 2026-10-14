@@ -7,10 +7,11 @@
 
 struct VoxelData {
     vec3 color;
-    float transparency;
+    float ior; // 0 for opaque/empty, otherwise index of refraction
     float opacity;
     float reflectiveness;
     float luminescence;
+    float metallic;
 };
 
 struct ChunkHeader {
@@ -33,6 +34,15 @@ struct VoxelBlockHeader {
     uint index_base;
     uint info;
 };
+
+// Align to the storage block grid, including negative world coordinates.
+ivec3 worldToBlockLower(ivec3 wp) {
+    return wp - ivec3(
+        positiveMod(wp.x, BLOCK_SIZE),
+        positiveMod(wp.y, BLOCK_SIZE),
+        positiveMod(wp.z, BLOCK_SIZE)
+    );
+}
 
 ivec3 worldToChunkCoord(ivec3 wp) {
     return ivec3(
@@ -134,10 +144,12 @@ VoxelData decodeVoxel(uvec2 voxelPacked) {
         float((lo >> 16u) & 0xFFu)
     ) / 255.0;
 
-    v.transparency   = float((lo >> 24u) & 0xFFu) / 255.0;
+    uint indexCode = (lo >> 24u) & 0xFFu;
+    v.ior = indexCode == 0u ? 0.0 : 1.0 + float(indexCode - 1u) * (1.5 / 254.0);
     v.opacity        = float((hi >> 0u)  & 0xFFu) / 255.0;
     v.reflectiveness = float((hi >> 8u)  & 0xFFu) / 255.0;
     v.luminescence   = float((hi >> 16u) & 0xFFu) / 255.0;
+    v.metallic = float((hi >> 24u) & 0xFFu) / 255.0;
     return v;
 }
 
@@ -151,10 +163,11 @@ VoxelData voxelFromPalette(uint paletteBase, uint paletteIndex) {
 
 VoxelData voxelFromBlockId(uint blockId) {
     VoxelData v;
-    v.transparency = 0.0;
+    v.ior = 0.0;
     v.opacity = 1.0;
     v.reflectiveness = 0.0;
     v.luminescence = 0.0;
+    v.metallic = 0.0;
 
     if (blockId == 0u) {
         v.color = vec3(0.0);

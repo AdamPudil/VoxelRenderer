@@ -178,6 +178,7 @@ fn loadShaderSource(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 
 fn compileShader(src: []const u8, kind: c_uint) !c_uint {
     const shader = gl.createShader(kind);
+    errdefer gl.deleteShader(shader);
 
     var ptrs: [1][*c]const u8 = .{src.ptr};
     var len: c_int = @intCast(src.len);
@@ -221,7 +222,7 @@ fn compileShaderFromPath(
     const src = try loadShaderSource(allocator, path);
     defer allocator.free(src);
 
-    std.debug.print("expanded shader [{s}]:\n{s}\n", .{ path, src });
+    std.debug.print("Compiling shader: {s}\n", .{path});
 
     return switch (stage) {
         .vertex => compileShader(src, c.GL_VERTEX_SHADER),

@@ -158,6 +158,16 @@ pub const Block = struct {
         };
     }
 
+    pub fn clone(self: *const Block, allocator: std.mem.Allocator) !Block {
+        var copy = self.*;
+        if (self.blockData == .voxel) {
+            const ptr = try allocator.create(VoxelBlock);
+            ptr.* = self.blockData.voxel.*;
+            copy.blockData = .{ .voxel = ptr };
+        }
+        return copy;
+    }
+
     pub fn deinit(self: *Block, allocator: std.mem.Allocator) void {
         switch (self.blockData) {
             .voxel => |ptr| allocator.destroy(ptr),

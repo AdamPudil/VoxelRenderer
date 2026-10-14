@@ -1,0 +1,4 @@
+name: Blue
+variant: 0
+model: 03_blue.vox
+# Omit icon to render a 64x64 PNG with the engine.

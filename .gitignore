@@ -1,9 +1,21 @@
 .zig-cache/
 zig-out/
+
 *.patch
 *.tar.gz
+
 fps_log.txt
 
-testOut/
-screenshots/
-logs/
+*.pgm
+# Block icons are generated from the models on startup.
+assets/blocks/icons/
+
+# Runtime logs and generated test output
+/logs/
+/testOut/
+
+# Timestamped application screenshots
+/screenshots/screenshot_*
+
+# Local source archive
+/src.zip

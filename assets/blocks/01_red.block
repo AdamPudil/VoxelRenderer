@@ -1,0 +1,4 @@
+name: Red
+variant: 0
+model: 01_red.vox
+# Omit icon to render a 64x64 PNG with the engine.

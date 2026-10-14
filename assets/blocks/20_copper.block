@@ -1,0 +1,6 @@
+format: 2
+name: "Copper"
+variant: 0
+model: "20_copper.vox"
+reflectivity: 0.72
+metallic: 1
