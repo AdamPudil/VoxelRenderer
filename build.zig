@@ -48,6 +48,27 @@ pub fn build(b: *std.Build) void {
     b.step("test-camera", "Test camera registry, validation and resolved snapshots").dependOn(&run_camera_tests.step);
     test_step.dependOn(&run_camera_tests.step);
 
+    const generation_tests = b.addTest(.{ .root_source_file = b.path("src/generationTests.zig"), .target = target, .optimize = optimize });
+    const run_generation_tests = b.addRunArtifact(generation_tests);
+    b.step("test-generation", "Test position hashes and hierarchical generation").dependOn(&run_generation_tests.step);
+    test_step.dependOn(&run_generation_tests.step);
+
+    const generation_full_tests = b.addTest(.{ .root_source_file = b.path("src/generationFullTests.zig"), .target = target, .optimize = .ReleaseSafe });
+    b.step("test-generation-full", "Generate nine superchunks and all their chunks at voxel resolution").dependOn(&b.addRunArtifact(generation_full_tests).step);
+
+    const generation_preview = b.addExecutable(.{ .name = "generation-preview", .root_source_file = b.path("src/generationPreview.zig"), .target = target, .optimize = .ReleaseSafe });
+    generation_preview.linkLibC();
+    generation_preview.addIncludePath(b.path("libs/c/stb"));
+    generation_preview.addCSourceFile(.{ .file = b.path("libs/c/stb/stb_image_write.c"), .flags = &.{} });
+    const run_generation_preview = b.addRunArtifact(generation_preview);
+    if (b.args) |args| run_generation_preview.addArgs(args);
+    b.step("generation-preview", "Export terrain and height-map PNGs with timings (directory, resolution, superchunks per side)").dependOn(&run_generation_preview.step);
+
+    const run_lod_preview = b.addRunArtifact(generation_preview);
+    run_lod_preview.addArg("--lod");
+    if (b.args) |args| run_lod_preview.addArgs(args);
+    b.step("generation-lod-preview", "Export a chunk/block/voxel circular LOD preview (optional output directory)").dependOn(&run_lod_preview.step);
+
     const render_test = b.addExecutable(.{ .name = "block-render-test", .root_source_file = b.path("src/blockRenderTest.zig"), .target = target, .optimize = optimize });
     render_test.linkLibC();
     for ([_][]const u8{ "GL", "GLEW", "EGL" }) |lib| render_test.linkSystemLibrary(lib);

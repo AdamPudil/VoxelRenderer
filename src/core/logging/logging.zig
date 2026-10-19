@@ -155,7 +155,7 @@ pub const Logging = struct {
         }
     }
 
-    fn printBoth(
+    pub fn printBoth(
         self: *Logging,
         comptime fmt: []const u8,
         args: anytype,
