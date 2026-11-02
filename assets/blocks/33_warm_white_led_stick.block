@@ -1,0 +1,9 @@
+format: 2
+name: "Warm White LED Stick"
+variant: 0
+model: "33_warm_white_led_stick.vox"
+reflectivity: 0
+metallic: 0
+ior: 1.5
+emission_color: 255, 215, 160
+light: 7.5, 5.5, 7.5, 128, 1, 0.68703085, 0.3586539, 3

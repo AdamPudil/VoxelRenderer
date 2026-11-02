@@ -124,6 +124,16 @@ pub fn main() !void {
     defer world.deinit() catch |err| {
         std.debug.print("{}", .{err});
     };
+    const lighting = @import("lighting.zig");
+    if (lighting.applicationFeatures().point_lights) {
+        try world.scene_lights.append(.{ .position = .{ cam_pos[0], cam_pos[1] + lighting.sun_height, cam_pos[2] }, .color = lighting.sun_color, .intensity = lighting.sun_intensity, .radius = lighting.sun_radius });
+        std.debug.print("Lighting: above-spawn light at {any}, radius {d}; budget {d} lights, {d} sky rays\n", .{ world.scene_lights.items[0].position, lighting.sun_radius, lighting.max_lights, lighting.sky_extra_ray_count + 1 });
+    }
+    var lighting_cache = try @import("graphics/lightingCache.zig").Cache.init(program);
+    defer lighting_cache.deinit();
+    var gi_cache = try @import("graphics/globalIllumination.zig").Cache.init(program, lighting.applicationFeatures(), lighting.sky_extra_ray_count);
+    defer gi_cache.deinit();
+    var light_uniforms = @import("graphics/pointLights.zig").Uniforms.init(program);
     try @import("world/startupBuilding.zig").place(&world);
     try world.startGenerator();
     //try world.enqueueInitialArea();
@@ -258,6 +268,7 @@ pub fn main() !void {
             }
         }
         world.bindGpuTextures();
+        light_uniforms.upload(world.scene_lights.items, world.block_lights.items, cam_pos);
 
         // Outline exactly the cell affected by the current removal mode.
         gl.uniform1i(voxelModeLoc, @intFromBool(menu.removal.voxel));
@@ -286,8 +297,12 @@ pub fn main() !void {
             STREAM_CHUNKS_XZ,
         );
 
-        // draw
+        // Reuse face lighting across frames; publish misses after the draw.
+        try lighting_cache.begin(world.gpu_revision, light_uniforms.revision);
+        try gi_cache.begin(&world);
         c.glDrawArrays(c.GL_TRIANGLES, 0, 3);
+        lighting_cache.end();
+        gi_cache.update();
 
         try menu.draw(@floatFromInt(window_width), @floatFromInt(window_height), @floatCast(x), @floatCast(y), &registry, &icons);
         c.glfwSwapBuffers(window);

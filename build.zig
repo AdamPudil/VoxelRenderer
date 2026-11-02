@@ -80,6 +80,13 @@ pub fn build(b: *std.Build) void {
     render_run.setEnvironmentVariable("MESA_GLSL_VERSION_OVERRIDE", "460");
     b.step("test-render", "Render block icons and menu offscreen with Mesa/EGL").dependOn(&render_run.step);
 
+    const gi_run = b.addRunArtifact(render_test);
+    gi_run.addArg("--gi-only");
+    gi_run.setEnvironmentVariable("LIBGL_ALWAYS_SOFTWARE", "1");
+    gi_run.setEnvironmentVariable("MESA_GL_VERSION_OVERRIDE", "4.6");
+    gi_run.setEnvironmentVariable("MESA_GLSL_VERSION_OVERRIDE", "460");
+    b.step("test-gi", "Check queued progressive global illumination offscreen").dependOn(&gi_run.step);
+
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

@@ -1,0 +1,9 @@
+format: 2
+name: "Sci-Fi Lamp"
+variant: 0
+model: "31_scifi_lamp.vox"
+reflectivity: 0
+metallic: 0
+ior: 1.5
+emission_color: 90, 220, 255
+light: 7.5, 7.5, 7.5, 128, 0.25, 0.8, 1, 3

@@ -1,5 +1,6 @@
 const std = @import("std");
 const gl = @import("gl.zig");
+const lighting = @import("../lighting.zig");
 
 const c = @cImport({
     @cInclude("GL/glew.h");
@@ -218,8 +219,18 @@ fn compileShaderFromPath(
     path: []const u8,
     stage: ShaderStage,
     allocator: std.mem.Allocator,
+    features: lighting.Features,
+    extra_rays: u32,
 ) !c_uint {
-    const src = try loadShaderSource(allocator, path);
+    const raw = try loadShaderSource(allocator, path);
+    defer allocator.free(raw);
+    var stage_features = features;
+    // The GL 3.3 picking vertex shader never shades or accesses image storage.
+    if (stage == .vertex) {
+        stage_features.face_cache = false;
+        stage_features.mode = .legacy;
+    }
+    const src = try lighting.specialize(allocator, raw, stage_features, extra_rays);
     defer allocator.free(src);
 
     std.debug.print("Compiling shader: {s}\n", .{path});
@@ -231,16 +242,20 @@ fn compileShaderFromPath(
 }
 
 pub fn createProgram(path_or_stem: []const u8) !c_uint {
+    return createLightingProgram(path_or_stem, lighting.applicationFeatures(), lighting.sky_extra_ray_count);
+}
+
+pub fn createLightingProgram(path_or_stem: []const u8, features: lighting.Features, extra_rays: u32) !c_uint {
     const allocator = std.heap.page_allocator;
 
     const pair = try resolveEntryPair(path_or_stem, allocator);
     defer allocator.free(pair.vertex_path);
     defer allocator.free(pair.fragment_path);
 
-    const vs = try compileShaderFromPath(pair.vertex_path, .vertex, allocator);
+    const vs = try compileShaderFromPath(pair.vertex_path, .vertex, allocator, features, extra_rays);
     errdefer gl.deleteShader(vs);
 
-    const fs = try compileShaderFromPath(pair.fragment_path, .fragment, allocator);
+    const fs = try compileShaderFromPath(pair.fragment_path, .fragment, allocator, features, extra_rays);
     errdefer gl.deleteShader(fs);
 
     const prog = gl.createProgram();

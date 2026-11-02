@@ -14,6 +14,8 @@ pub const Metadata = struct {
     metallic: f32 = 0,
     opacity: ?f32 = null,
     ior: f32 = 1.5,
+    emission_color: ?[3]u8 = null,
+    light: ?@import("../lighting.zig").PointLight = null,
 };
 
 /// Returned slices borrow the descriptor text. Paths are relative to its folder.
@@ -28,6 +30,8 @@ pub fn parseMetadata(text: []const u8) !Metadata {
     var metallic: f32 = 0;
     var opacity: ?f32 = null;
     var ior: f32 = 1.5;
+    var emission_color: ?[3]u8 = null;
+    var light: ?@import("../lighting.zig").PointLight = null;
     var seen: u16 = 0;
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
@@ -37,7 +41,7 @@ pub fn parseMetadata(text: []const u8) !Metadata {
         const key = std.mem.trim(u8, trimmed[0..colon], " \t");
         var value = std.mem.trim(u8, trimmed[colon + 1 ..], " \t");
         if (value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"') value = value[1 .. value.len - 1];
-        const field: u16 = if (std.ascii.eqlIgnoreCase(key, "name") or std.ascii.eqlIgnoreCase(key, "block name")) 1 else if (std.ascii.eqlIgnoreCase(key, "variant")) 2 else if (std.ascii.eqlIgnoreCase(key, "model") or std.ascii.eqlIgnoreCase(key, "model path")) 4 else if (std.ascii.eqlIgnoreCase(key, "icon") or std.ascii.eqlIgnoreCase(key, "icon path")) 8 else if (std.ascii.eqlIgnoreCase(key, "format")) 16 else if (std.ascii.eqlIgnoreCase(key, "color")) 32 else if (std.ascii.eqlIgnoreCase(key, "reflectivity") or std.ascii.eqlIgnoreCase(key, "reflectiveness")) 64 else if (std.ascii.eqlIgnoreCase(key, "metallic")) 128 else if (std.ascii.eqlIgnoreCase(key, "opacity") or std.ascii.eqlIgnoreCase(key, "transparency")) 256 else if (std.ascii.eqlIgnoreCase(key, "ior")) 512 else return error.UnknownBlockAttribute;
+        const field: u16 = if (std.ascii.eqlIgnoreCase(key, "name") or std.ascii.eqlIgnoreCase(key, "block name")) 1 else if (std.ascii.eqlIgnoreCase(key, "variant")) 2 else if (std.ascii.eqlIgnoreCase(key, "model") or std.ascii.eqlIgnoreCase(key, "model path")) 4 else if (std.ascii.eqlIgnoreCase(key, "icon") or std.ascii.eqlIgnoreCase(key, "icon path")) 8 else if (std.ascii.eqlIgnoreCase(key, "format")) 16 else if (std.ascii.eqlIgnoreCase(key, "color")) 32 else if (std.ascii.eqlIgnoreCase(key, "reflectivity") or std.ascii.eqlIgnoreCase(key, "reflectiveness")) 64 else if (std.ascii.eqlIgnoreCase(key, "metallic")) 128 else if (std.ascii.eqlIgnoreCase(key, "opacity") or std.ascii.eqlIgnoreCase(key, "transparency")) 256 else if (std.ascii.eqlIgnoreCase(key, "ior")) 512 else if (std.ascii.eqlIgnoreCase(key, "emission_color")) 1024 else if (std.ascii.eqlIgnoreCase(key, "light")) 2048 else return error.UnknownBlockAttribute;
         if (seen & field != 0) return error.DuplicateBlockAttribute;
         seen |= field;
         switch (field) {
@@ -49,12 +53,12 @@ pub fn parseMetadata(text: []const u8) !Metadata {
                 version = std.fmt.parseInt(u8, value, 10) catch return error.UnsupportedBlockFormat;
                 if (version != 1 and version != 2) return error.UnsupportedBlockFormat;
             },
-            32 => {
+            32, 1024 => {
                 var components = std.mem.tokenizeAny(u8, value, " ,\t");
                 var rgb: [3]u8 = undefined;
                 for (&rgb) |*channel| channel.* = std.fmt.parseInt(u8, components.next() orelse return error.InvalidBlockColor, 10) catch return error.InvalidBlockColor;
                 if (components.next() != null) return error.InvalidBlockColor;
-                color = rgb;
+                if (field == 32) color = rgb else emission_color = rgb;
             },
             64 => reflectivity = try materialFactor(value),
             128 => metallic = try materialFactor(value),
@@ -66,11 +70,21 @@ pub fn parseMetadata(text: []const u8) !Metadata {
                 ior = std.fmt.parseFloat(f32, value) catch return error.InvalidRefractiveIndex;
                 if (!std.math.isFinite(ior) or ior < 1 or ior > 2.5) return error.InvalidRefractiveIndex;
             },
+            2048 => {
+                var components = std.mem.tokenizeAny(u8, value, " ,\t");
+                var values: [8]f32 = undefined;
+                for (&values) |*v| {
+                    v.* = std.fmt.parseFloat(f32, components.next() orelse return error.InvalidPointLight) catch return error.InvalidPointLight;
+                    if (!std.math.isFinite(v.*)) return error.InvalidPointLight;
+                }
+                if (components.next() != null or values[3] <= 0 or values[4] < 0 or values[5] < 0 or values[6] < 0 or values[7] < 0) return error.InvalidPointLight;
+                light = .{ .position = values[0..3].*, .radius = values[3], .color = values[4..7].*, .intensity = values[7] };
+            },
             else => unreachable,
         }
     }
     if (name == null or name.?.len == 0 or model == null or model.?.len == 0) return error.MissingBlockAttribute;
-    return .{ .name = name.?, .model = model.?, .variant = variant, .icon = icon, .format = version, .color = color, .reflectivity = reflectivity, .metallic = metallic, .opacity = opacity, .ior = ior };
+    return .{ .name = name.?, .model = model.?, .variant = variant, .icon = icon, .format = version, .color = color, .reflectivity = reflectivity, .metallic = metallic, .opacity = opacity, .ior = ior, .emission_color = emission_color, .light = light };
 }
 
 fn materialFactor(value: []const u8) !f32 {
@@ -101,6 +115,13 @@ pub fn encodeMetadata(allocator: std.mem.Allocator, meta: Metadata) ![]u8 {
     try w.print("reflectivity: {d}\nmetallic: {d}\n", .{ meta.reflectivity, meta.metallic });
     if (meta.opacity) |opacity| try w.print("opacity: {d}\n", .{opacity});
     try w.print("ior: {d}\n", .{meta.ior});
+    if (meta.emission_color) |rgb| try w.print("emission_color: {d}, {d}, {d}\n", .{ rgb[0], rgb[1], rgb[2] });
+    if (meta.light) |light| {
+        for (light.position ++ .{light.radius} ++ light.color ++ .{light.intensity}) |v| if (!std.math.isFinite(v)) return error.InvalidPointLight;
+        if (light.radius <= 0 or light.intensity < 0) return error.InvalidPointLight;
+        for (light.color) |v| if (v < 0) return error.InvalidPointLight;
+        try w.print("light: {d}, {d}, {d}, {d}, {d}, {d}, {d}, {d}\n", .{ light.position[0], light.position[1], light.position[2], light.radius, light.color[0], light.color[1], light.color[2], light.intensity });
+    }
     return text.toOwnedSlice();
 }
 
@@ -114,9 +135,11 @@ pub fn saveMetadata(allocator: std.mem.Allocator, dir: std.fs.Dir, path: []const
     try file.finish();
 }
 
-/// Override palette material without changing occupancy or emission.
+/// Override palette material without changing occupancy. Emission is preserved
+/// unless emission_color explicitly selects luminous palette entries.
 /// Packed material bytes survive cloning, editing and GPU streaming unchanged.
 pub fn applyMaterial(block: *Block, meta: Metadata) void {
+    block.light = meta.light;
     switch (block.blockData) {
         .free => {},
         .mono => |*voxel| applyVoxelMaterial(voxel, meta),
@@ -129,6 +152,9 @@ pub fn applyMaterial(block: *Block, meta: Metadata) void {
     }
 }
 fn applyVoxelMaterial(voxel: *Voxel, meta: Metadata) void {
+    if (meta.emission_color) |rgb| {
+        voxel.luminescence = if (voxel.r == rgb[0] and voxel.g == rgb[1] and voxel.b == rgb[2]) 255 else 0;
+    }
     if (meta.color) |rgb| {
         voxel.r = rgb[0];
         voxel.g = rgb[1];
@@ -325,4 +351,30 @@ test "opacity and IOR roundtrip, aliases, and fully clear occupied glass" {
     try std.testing.expectError(error.InvalidMaterialFactor, parseMetadata("name: x\nmodel: a.vox\nopacity: -0.1"));
     try std.testing.expectEqual(@as(u8, 1), Voxel.encodeIor(1));
     try std.testing.expectEqual(@as(u8, 255), Voxel.encodeIor(2.5));
+}
+
+test "emitter metadata roundtrips and validates scene data" {
+    const a = std.testing.allocator;
+    const meta = Metadata{ .name = "Lamp", .model = "lamp.vox", .emission_color = .{ 90, 220, 255 }, .light = .{} };
+    const text = try encodeMetadata(a, meta);
+    defer a.free(text);
+    const parsed = try parseMetadata(text);
+    try std.testing.expectEqualDeep(meta.light, parsed.light);
+    try std.testing.expectEqualDeep(meta.emission_color, parsed.emission_color);
+    try std.testing.expectError(error.InvalidPointLight, parseMetadata("name: Lamp\nmodel: lamp.vox\nlight: 8, 16, 8, -1, 1, 1, 1, 2\n"));
+    try std.testing.expectError(error.InvalidPointLight, parseMetadata("name: Lamp\nmodel: lamp.vox\nlight: nan, 16, 8, 128, 1, 1, 1, 2\n"));
+    var block = try Block.initVoxel(a, 0);
+    defer block.deinit(a);
+    block.blockData.voxel.setPaletteEntry(1, Voxel.rgb(90, 220, 255));
+    block.blockData.voxel.setPaletteEntry(2, Voxel.rgb(35, 40, 50));
+    block.blockData.voxel.setVoxel(0, 0, 0, 1);
+    block.blockData.voxel.setVoxel(1, 0, 0, 2);
+    applyMaterial(&block, parsed);
+    try std.testing.expectEqual(@as(u8, 255), block.blockData.voxel.getVoxel(0, 0, 0).?.luminescence);
+    try std.testing.expectEqual(@as(u8, 0), block.blockData.voxel.getVoxel(1, 0, 0).?.luminescence);
+    var copy = try block.clone(a);
+    defer copy.deinit(a);
+    try std.testing.expectEqualDeep(block.light, copy.light);
+    copy.setFree(a, 0);
+    try std.testing.expect(copy.light == null);
 }
