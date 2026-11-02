@@ -140,7 +140,7 @@ fn loadShaderSourceRecursive(
 
     try include_stack.append(try allocator.dupe(u8, path));
     defer {
-        const p = include_stack.pop();
+        const p = include_stack.pop().?;
         allocator.free(p);
     }
 

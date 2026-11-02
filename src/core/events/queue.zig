@@ -50,7 +50,7 @@ pub fn getEventQueue(comptime descriptors: []const event_desc.EventTypeDescripto
         fields[i] = .{
             .name = descriptor.name ++ "",
             .type = Queue,
-            .default_value = &@as(Queue, .{}),
+            .default_value_ptr = &@as(Queue, .{}),
             .is_comptime = false,
             .alignment = @alignOf(Queue),
         };

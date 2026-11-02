@@ -1,6 +1,7 @@
 .{
-    .name = "voxel",
+    .name = .voxel,
     .version = "0.0.1",
+    .fingerprint = 0xd5998e5ed26bbc68,
 
     .paths = .{
         "build.zig",
