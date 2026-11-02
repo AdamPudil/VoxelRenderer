@@ -19,6 +19,6 @@ const int BLOCK_STATE_VOXEL = 2;
 
 const int renderDistance = 512;
 
-const vec4 skyColor = vec4(0.4, 0.1, 0.1, 1.0);
+const vec4 skyColor = vec4(BACKGROUND_RGB, 1.0);
 
 #endif

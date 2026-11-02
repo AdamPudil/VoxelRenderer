@@ -1,0 +1,9 @@
+format: 2
+name: "Cold White LED Stick"
+variant: 0
+model: "32_cold_white_led_stick.vox"
+reflectivity: 0
+metallic: 0
+ior: 1.5
+emission_color: 190, 220, 255
+light: 7.5, 5.5, 7.5, 128, 0.5234432, 0.72267246, 1, 3

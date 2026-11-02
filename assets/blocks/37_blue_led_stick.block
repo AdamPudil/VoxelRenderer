@@ -1,0 +1,9 @@
+format: 2
+name: "Blue LED Stick"
+variant: 0
+model: "37_blue_led_stick.vox"
+reflectivity: 0
+metallic: 0
+ior: 1.5
+emission_color: 0, 0, 255
+light: 7.5, 5.5, 7.5, 128, 0, 0, 1, 3

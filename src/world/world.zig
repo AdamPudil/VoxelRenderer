@@ -5,6 +5,7 @@ const Block = @import("block.zig").Block;
 const VoxelBlock = @import("block.zig").VoxelBlock;
 const Voxel = @import("voxel.zig").Voxel;
 const wc = @import("worldConstants.zig");
+const lighting = @import("../lighting.zig");
 const gl = @import("../graphics/gl.zig");
 
 const c = @cImport({
@@ -92,6 +93,8 @@ pub const World = struct {
 
     chunks: std.AutoHashMap(ChunkKey, Chunk),
     dirty_chunks: std.ArrayList(ChunkKey),
+    scene_lights: std.ArrayList(lighting.PointLight),
+    block_lights: std.ArrayList(lighting.PointLight),
 
     generator_thread: ?std.Thread = null,
     stream_mutex: std.Thread.Mutex = .{},
@@ -105,6 +108,7 @@ pub const World = struct {
 
     gpu_region_origin_chunk: [3]i32 = .{ 0, 0, 0 },
     gpu_region_valid: bool = false,
+    gpu_revision: u64 = 0, // successful geometry uploads invalidate surface lighting
 
     chunk_header_buf: c_uint = 0,
     block_header_buf: c_uint = 0,
@@ -132,6 +136,8 @@ pub const World = struct {
     pub fn initCpu(allocator: std.mem.Allocator) !Self {
         var self: Self = .{
             .allocator = allocator,
+            .scene_lights = std.ArrayList(lighting.PointLight).init(allocator),
+            .block_lights = std.ArrayList(lighting.PointLight).init(allocator),
             .chunks = std.AutoHashMap(ChunkKey, Chunk).init(allocator),
             .dirty_chunks = std.ArrayList(ChunkKey).init(allocator),
 
@@ -200,6 +206,8 @@ pub const World = struct {
         self.ready_set.deinit();
         self.inflight_set.deinit();
         self.dirty_chunks.deinit();
+        self.scene_lights.deinit();
+        self.block_lights.deinit();
 
         self.block_headers_cpu.deinit();
         self.voxel_block_headers_cpu.deinit();
@@ -379,7 +387,10 @@ pub const World = struct {
             if (!gop.found_existing) {
                 gop.value_ptr.* = item.chunk;
                 try self.ready_set.put(item.key, {});
-                try self.dirty_chunks.append(item.key);
+                // Missing chunks already render as air. Streaming an empty
+                // chunk changes CPU placement availability, but not GPU geometry
+                // or cached lighting; avoid rebuilding/invalidation every frame.
+                if (item.chunk.chunkData != .free) try self.dirty_chunks.append(item.key);
                 _ = self.inflight_set.remove(item.key);
             } else {
                 item.chunk.deinit(self.allocator);
@@ -571,7 +582,18 @@ pub const World = struct {
             @memset(&vb.occupance, std.math.maxInt(u32));
             vb.solid_count = VOXELS_PER_BLOCK;
         }
+        edited.light = source.light;
         vb.clearVoxel(@intCast(@mod(pos[0], BLOCK_VOXEL_CNT)), @intCast(@mod(pos[1], BLOCK_VOXEL_CNT)), @intCast(@mod(pos[2], BLOCK_VOXEL_CNT)));
+        // A damaged lamp remains attached until its last luminous insert is gone.
+        if (edited.light != null) {
+            var emitting = false;
+            for (0..BLOCK_VOXEL_CNT) |z| for (0..BLOCK_VOXEL_CNT) |y| for (0..BLOCK_VOXEL_CNT) |x| {
+                if (vb.getVoxel(x, y, z)) |v| if (v.luminescence > 0) {
+                    emitting = true;
+                };
+            };
+            if (!emitting) edited.light = null;
+        }
         if (vb.solid_count == 0) edited.setFree(self.allocator, source.blockID);
         try self.setBlock(coord, &edited);
         return true;
@@ -625,6 +647,7 @@ pub const World = struct {
             h.* = .{ .state = 0, .data0 = 0, .data1 = 0, .data2 = 0 };
         }
 
+        self.block_lights.clearRetainingCapacity();
         self.block_headers_cpu.clearRetainingCapacity();
         self.voxel_block_headers_cpu.clearRetainingCapacity();
         self.bitmap_pool_cpu.clearRetainingCapacity();
@@ -656,6 +679,7 @@ pub const World = struct {
 
         try self.uploadWholeGpuState();
         self.gpu_region_valid = true;
+        self.gpu_revision +%= 1;
     }
 
     // chunk packing
@@ -687,6 +711,18 @@ pub const World = struct {
                         for (0..CHUNK_BLOCK_CNT) |x| {
                             const block = &bc.blocks[z][y][x];
                             try self.packBlockToGpu(block);
+                            if (lighting.LightingFeatures.point_lights) {
+                                if (block.light) |local| {
+                                    if (!block.isFree()) {
+                                        var light = local;
+                                        const key = self.slot_keys[slot].?;
+                                        const coords = [3]i32{ key.x, key.y, key.z };
+                                        const offsets = [3]usize{ x, y, z };
+                                        for (0..3) |axis| light.position[axis] += @floatFromInt(coords[axis] * CHUNK_SIDE_VOXELS + @as(i32, @intCast(offsets[axis])) * BLOCK_VOXEL_CNT);
+                                        try self.block_lights.append(light);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -790,15 +826,26 @@ pub const World = struct {
 
         const new_origin = computeRegionChunkOrigin(cam_pos);
 
+        var visible_dirty = false;
+        for (self.dirty_chunks.items) |key| {
+            if (key.x >= new_origin[0] and key.x < new_origin[0] + STREAM_CHUNKS_XZ and
+                key.y >= new_origin[1] and key.y < new_origin[1] + STREAM_CHUNKS_Y and
+                key.z >= new_origin[2] and key.z < new_origin[2] + STREAM_CHUNKS_XZ)
+            {
+                visible_dirty = true;
+                break;
+            }
+        }
         if (!self.gpu_region_valid or
             self.gpu_region_origin_chunk[0] != new_origin[0] or
             self.gpu_region_origin_chunk[1] != new_origin[1] or
-            self.gpu_region_origin_chunk[2] != new_origin[2] or
-            self.dirty_chunks.items.len > 0)
+            self.gpu_region_origin_chunk[2] != new_origin[2] or visible_dirty)
         {
             try self.rebuildGpuRegion(new_origin);
-            self.dirty_chunks.clearRetainingCapacity();
         }
+        // Off-region changes remain owned by chunks; entering that region always
+        // rebuilds it. They cannot affect rays limited to the current GPU volume.
+        self.dirty_chunks.clearRetainingCapacity();
     }
 };
 
@@ -914,4 +961,16 @@ test "fully transparent glass remains occupied, pickable and packed" {
     try std.testing.expect(!world.blockIsEmpty(.{ 0, 0, 0 }));
     try std.testing.expect(world.raycast(.{ 8, 8, 32 }, .{ 0, 0, -1 }, 64) != null);
     try std.testing.expectEqual(glass.blockData.mono.refractive_index, @as(u8, @intCast(World.packVoxelLo(glass.blockData.mono) >> 24)));
+}
+
+test "streamed air does not dirty GPU geometry or invalidate lighting" {
+    var world = try World.initCpu(std.testing.allocator);
+    defer world.deinit() catch unreachable;
+    try world.finished_chunks.append(.{ .key = .{ .x = 0, .y = 1, .z = 0 }, .chunk = Chunk.initFree(0) });
+    try world.drainFinishedChunks();
+    try std.testing.expectEqual(@as(usize, 0), world.dirty_chunks.items.len);
+    try std.testing.expect(world.blockIsEmpty(.{ 0, 16, 0 }));
+    try world.finished_chunks.append(.{ .key = .{ .x = 1, .y = 1, .z = 0 }, .chunk = Chunk.initMono(0, Voxel.rgb(255, 255, 255)) });
+    try world.drainFinishedChunks();
+    try std.testing.expectEqual(@as(usize, 1), world.dirty_chunks.items.len);
 }

@@ -144,6 +144,9 @@ VoxelData decodeVoxel(uvec2 voxelPacked) {
         float((lo >> 16u) & 0xFFu)
     ) / 255.0;
 
+#if USE_POINT_LIGHTS || USE_SKY_LIGHTING || USE_GI
+    v.color = pow(v.color, vec3(2.2)); // palette bytes are display RGB
+#endif
     uint indexCode = (lo >> 24u) & 0xFFu;
     v.ior = indexCode == 0u ? 0.0 : 1.0 + float(indexCode - 1u) * (1.5 / 254.0);
     v.opacity        = float((hi >> 0u)  & 0xFFu) / 255.0;

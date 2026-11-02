@@ -1,0 +1,9 @@
+format: 2
+name: "Neutral White LED Stick"
+variant: 0
+model: "34_neutral_white_led_stick.vox"
+reflectivity: 0
+metallic: 0
+ior: 1.5
+emission_color: 255, 255, 255
+light: 7.5, 5.5, 7.5, 128, 1, 1, 1, 3

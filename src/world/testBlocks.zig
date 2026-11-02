@@ -1,9 +1,17 @@
 const std = @import("std");
+const PointLight = @import("../lighting.zig").PointLight;
+
+fn ledLight(color: [3]u8) PointLight {
+    var light = PointLight{ .position = .{ 7.5, 5.5, 7.5 } };
+    // Palette colors are display RGB; light descriptors use linear RGB.
+    for (color, 0..) |channel, i| light.color[i] = std.math.pow(f32, @as(f32, @floatFromInt(channel)) / 255, 2.2);
+    return light;
+}
 
 /// Create sample assets only when missing. User edits are never overwritten.
 pub fn ensure(allocator: std.mem.Allocator, folder: []const u8) !void {
     try std.fs.cwd().makePath(folder);
-    const samples = [_]struct { stem: []const u8, name: []const u8, variant: u8, color: [3]u8, reflectivity: f32 = 0, metallic: f32 = 0, opacity: ?f32 = null, ior: f32 = 1.5 }{
+    const samples = [_]struct { stem: []const u8, name: []const u8, variant: u8, color: [3]u8, reflectivity: f32 = 0, metallic: f32 = 0, opacity: ?f32 = null, ior: f32 = 1.5, light: ?PointLight = null }{
         .{ .stem = "01_red", .name = "Red", .variant = 0, .color = .{ 220, 55, 45 } },
         .{ .stem = "02_green", .name = "Green", .variant = 0, .color = .{ 65, 190, 90 } },
         .{ .stem = "03_blue", .name = "Blue", .variant = 0, .color = .{ 65, 115, 230 } },
@@ -34,6 +42,13 @@ pub fn ensure(allocator: std.mem.Allocator, folder: []const u8) !void {
         .{ .stem = "28_sanded_glass_red", .name = "Sanded Glass Red", .variant = 0, .color = .{ 255, 105, 105 }, .opacity = 0.5 },
         .{ .stem = "29_sanded_glass_green", .name = "Sanded Glass Green", .variant = 0, .color = .{ 105, 255, 105 }, .opacity = 0.5 },
         .{ .stem = "30_sanded_glass_blue", .name = "Sanded Glass Blue", .variant = 0, .color = .{ 105, 105, 255 }, .opacity = 0.5 },
+        .{ .stem = "31_scifi_lamp", .name = "Sci-Fi Lamp", .variant = 0, .color = .{ 90, 220, 255 }, .light = .{} },
+        .{ .stem = "32_cold_white_led_stick", .name = "Cold White LED Stick", .variant = 0, .color = .{ 190, 220, 255 }, .light = ledLight(.{ 190, 220, 255 }) },
+        .{ .stem = "33_warm_white_led_stick", .name = "Warm White LED Stick", .variant = 0, .color = .{ 255, 215, 160 }, .light = ledLight(.{ 255, 215, 160 }) },
+        .{ .stem = "34_neutral_white_led_stick", .name = "Neutral White LED Stick", .variant = 0, .color = .{ 255, 255, 255 }, .light = ledLight(.{ 255, 255, 255 }) },
+        .{ .stem = "35_red_led_stick", .name = "Red LED Stick", .variant = 0, .color = .{ 255, 0, 0 }, .light = ledLight(.{ 255, 0, 0 }) },
+        .{ .stem = "36_green_led_stick", .name = "Green LED Stick", .variant = 0, .color = .{ 0, 255, 0 }, .light = ledLight(.{ 0, 255, 0 }) },
+        .{ .stem = "37_blue_led_stick", .name = "Blue LED Stick", .variant = 0, .color = .{ 0, 0, 255 }, .light = ledLight(.{ 0, 0, 255 }) },
     };
     for (samples, 0..) |sample, i| {
         const model_path = try std.fmt.allocPrint(allocator, "{s}/{s}.vox", .{ folder, sample.stem });
@@ -53,6 +68,8 @@ pub fn ensure(allocator: std.mem.Allocator, folder: []const u8) !void {
             .metallic = sample.metallic,
             .opacity = sample.opacity,
             .ior = sample.ior,
+            .emission_color = if (sample.light != null) sample.color else null,
+            .light = sample.light,
         });
         defer allocator.free(descriptor);
         try writeMissing(descriptor_path, descriptor);
@@ -73,9 +90,30 @@ pub fn encodeSample(allocator: std.mem.Allocator, kind: usize, color: [3]u8) ![]
     var records = std.ArrayList(u8).init(allocator);
     defer records.deinit();
     for (0..16) |z| for (0..16) |y| for (0..16) |x| {
+        // One-voxel-wide, six-voxel-tall colored stick. Its light sits in
+        // the top emissive voxel, which the shadow endpoint policy permits.
+        if (kind >= 31 and kind <= 36) {
+            if (x != 7 or y != 8 or z >= 6) continue;
+        }
         if (kind == 5) {
             const edges = @as(u8, @intFromBool(x < 2 or x >= 14)) + @as(u8, @intFromBool(y < 2 or y >= 14)) + @as(u8, @intFromBool(z < 2 or z >= 14));
             if (edges < 2) continue;
+        }
+        // Sparse cage: one-voxel edges and two one-voxel bars on each face.
+        // VOX (x,y,z) maps to world (x,z,15-y); the single cyan emitter is
+        // centered on world voxel (7,7,7), around the attached point light.
+        if (kind == 30) {
+            const edge_x = x == 0 or x == 15;
+            const edge_y = y == 0 or y == 15;
+            const edge_z = z == 0 or z == 15;
+            const frame = @as(u8, @intFromBool(edge_x)) + @as(u8, @intFromBool(edge_y)) + @as(u8, @intFromBool(edge_z)) >= 2;
+            const bars = ((edge_y or edge_z) and (x == 5 or x == 10)) or
+                (edge_x and (y == 5 or y == 10));
+            const core = x == 7 and y == 8 and z == 7;
+            if (!frame and !bars and !core) continue;
+            const index: u8 = if (core) 1 else 2;
+            try records.appendSlice(&.{ @intCast(x), @intCast(y), @intCast(z), index });
+            continue;
         }
         const step: usize = if (kind == 4) 1 else 4;
         const index: u8 = if ((kind == 3 or kind == 4) and (x / step + y / step + z / step) % 2 == 1) 2 else 1;

@@ -24,22 +24,6 @@ vec3 getRay(vec2 fragCoord) {
     return normalize(forward + p.x * right + p.y * up);
 }
 
-vec4 getShade(VoxelData voxel, vec3 normal) {
-    vec3 lightDir = normalize(vec3(1.0, 1.0, 0.8));
-    float diff = max(dot(normal, lightDir), 0.0);
-    float light = 0.25 + diff * 0.75;
-
-    float dirTint = 1.0;
-    if (abs(normal.x) > 0.5) dirTint = 0.8;
-    if (abs(normal.z) > 0.5) dirTint = 1.0;
-    if (abs(normal.y) > 0.5) dirTint = 1.2;
-
-    vec3 lit = voxel.color * light * dirTint;
-    lit += voxel.color * voxel.luminescence * 0.75;
-
-    return vec4(lit, voxel.opacity);
-}
-
 // Advance every coordinate to the ray's exit from an empty region.
 // Updating only the exit axis leaves the other coordinates behind the ray.
 void skipEmptyRegion(vec3 pos, vec3 dir, int size,
@@ -55,7 +39,12 @@ void skipEmptyRegion(vec3 pos, vec3 dir, int size,
     int axis = exitTimes.x < exitTimes.y ? 0 : 1;
     if (exitTimes.z < exitTimes[axis]) axis = 2;
     float t = exitTimes[axis];
-    v = ivec3(floor(pos + dir * t));
+    // Rounding (including GPU fused multiply-add) can reconstruct a non-exit
+    // coordinate just outside this region, even behind the boundary we entered.
+    // That can bounce a ray between two empty regions until its step budget
+    // expires and creates a false shadow. Keep non-exit axes in the current
+    // region; only axes whose exit time is reached may cross its boundary.
+    v = clamp(ivec3(floor(pos + dir * t)), lower, upper - ivec3(1));
     // Exact boundary ownership, including negative rays and corner ties.
     for (int i = 0; i < 3; i++) {
         if (exitTimes[i] == t) v[i] = dir[i] > 0.0 ? upper[i] : lower[i] - 1;
@@ -87,6 +76,8 @@ VoxelData sampleMaterial(ivec3 cell, out int regionSize) {
     return voxelPresentAtWorld(cell, bh) ? voxelAtWorld(cell, bh) : decodeVoxel(uvec2(0u));
 }
 
+#include "lighting.glsl"
+
 bool sameMedium(VoxelData a, VoxelData b) {
     if (isAir(a) && isAir(b)) return true;
     return isGlass(a) && isGlass(b) && a.ior == b.ior && a.opacity == b.opacity &&
@@ -115,6 +106,10 @@ bool traceBoundary(vec3 pos, vec3 dir, VoxelData medium, out ivec3 cell,
         }
     }
     for (int i = 0; i < renderDistance; i++) {
+        // No GPU geometry exists beyond this convex volume. In outdoor views,
+        // misses used to walk hundreds more empty chunks before exhausting DDA.
+        // Glass still needs its final glass-to-air interface at the region edge.
+        if (!chunkInRegion(worldToChunkCoord(cell)) && isAir(medium)) return false;
         int regionSize;
         material = sampleMaterial(cell, regionSize);
         if (!sameMedium(material, medium)) {
@@ -139,24 +134,19 @@ bool traceBoundary(vec3 pos, vec3 dir, VoxelData medium, out ivec3 cell,
     return false;
 }
 
-vec4 traceSurface(vec3 pos, vec3 dir, out ivec3 hitVoxel,
-                  out vec3 hitNormal, out bool hit, out VoxelData material) {
-    vec3 point;
-    float distance;
-    hit = traceBoundary(pos, dir, decodeVoxel(uvec2(0u)), hitVoxel, hitNormal, point, distance, material);
-    return hit ? getShade(material, hitNormal) : (uIconMode ? vec4(0.0) : skyColor);
-}
-
 // Picking/selection vertex shaders need only the first hit, not reflection work.
 vec4 castTraceRay(vec3 pos, vec3 dir, out ivec3 hitVoxel,
                   out vec3 hitNormal, out bool hit) {
     VoxelData material;
-    return traceSurface(pos, dir, hitVoxel, hitNormal, hit, material);
+    vec3 point;
+    float distance;
+    hit = traceBoundary(pos, dir, decodeVoxel(uvec2(0u)), hitVoxel, hitNormal, point, distance, material);
+    return vec4(0.0); // selection needs geometry only
 }
 
 // Environment used for reflected and transmitted rays that miss loaded geometry.
 vec3 reflectionEnvironment(vec3 dir) {
-    if (!uIconMode) return skyColor.rgb;
+    if (!uIconMode) return environmentColor();
     // Isolated inventory previews have no surrounding scene. A neutral studio
     // environment makes metal colors readable without tinting them sky-red.
     float ambient = 0.2 + 0.45 * clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
@@ -219,7 +209,7 @@ vec4 castReflectedRay(vec3 pos, vec3 dir, out ivec3 hitVoxel,
         if (max(ray.weight.r, max(ray.weight.g, ray.weight.b)) < 0.001) continue;
         float bias = max(0.001, max(abs(point.x), max(abs(point.y), abs(point.z))) * 2.4e-7);
         if (!isGlass(material) && !isAir(material)) {
-            vec3 local = getShade(material, normal).rgb;
+            vec3 local = getShade(material, normal, point, cell).rgb;
             if (material.reflectiveness <= 0.0 || dot(normal, normal) == 0.0 || ray.reflections >= maxReflections) {
                 radiance += ray.weight * local;
                 continue;
@@ -263,7 +253,7 @@ vec4 castReflectedRay(vec3 pos, vec3 dir, out ivec3 hitVoxel,
         }
     }
     // Scene transmission is already composited here, not by OpenGL alpha blending.
-    return vec4(radiance, uIconMode && !hit ? 0.0 : 1.0);
+    return vec4(displayColor(radiance), uIconMode && !hit ? 0.0 : 1.0);
 }
 
 #endif

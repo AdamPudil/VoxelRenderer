@@ -133,6 +133,7 @@ pub const VoxelBlock = struct {
 pub const Block = struct {
     blockID: u32,
     blockData: BlockU,
+    light: ?@import("../lighting.zig").PointLight = null,
 
     pub fn initEmpty(blockID: u32) Block {
         return .{
@@ -177,12 +178,14 @@ pub const Block = struct {
 
     pub fn setFree(self: *Block, allocator: std.mem.Allocator, blockID: u32) void {
         self.deinit(allocator);
+        self.light = null;
         self.blockID = blockID;
         self.blockData = .{ .free = {} };
     }
 
     pub fn setMono(self: *Block, allocator: std.mem.Allocator, blockID: u32, voxel: Voxel) void {
         self.deinit(allocator);
+        self.light = null;
         self.blockID = blockID;
         self.blockData = .{ .mono = voxel };
     }
@@ -193,6 +196,7 @@ pub const Block = struct {
         const ptr = try allocator.create(VoxelBlock);
         ptr.* = VoxelBlock.initEmpty();
 
+        self.light = null;
         self.blockID = blockID;
         self.blockData = .{ .voxel = ptr };
     }

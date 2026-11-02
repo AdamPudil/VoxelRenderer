@@ -55,7 +55,8 @@ Run `zig build run` from the repository root. Startup creates missing
 sample `.block` descriptors and MagicaVoxel `.vox` models in `assets/blocks`:
 red, green, blue, white, black, yellow, orange, purple, cyan, pink, gray, brown,
 lighter red/green/blue variants, coarse checkerboard, fine checkerboard, and an
-open frame, gold, copper, iron, mirror, and eight glass variants (30 entries total).
+open frame, gold, copper, iron, mirror, eight glass variants, a sci-fi lamp,
+and six LED sticks (37 entries total).
 Existing sample files are preserved. Use `--assets=some/directory` to choose a
 different block folder (the samples are created there too).
 
@@ -213,7 +214,7 @@ zig build test-render   # optional headless Mesa/EGL icon and menu integration
 `test-render` requires EGL development files and Mesa software rendering. It
 checks both shader profiles, reflected offscreen targets, all six face directions,
 material tint, matte fallback, transmission, color mixing, oblique refraction,
-and total internal reflection, and writes previews to `/tmp/voxel-block-smoke/`.
+and total internal reflection. It also compiles all eight lighting feature combinations on both shader profiles and checks colored lights, shadow/radius bounds, sky ray presets, emission, and lamp ownership across edits and streaming. It writes previews to `/tmp/voxel-block-smoke/`.
 Normal builds continue to use GL, GLFW and GLEW. PNG loading uses the vendored
 [stb_image](https://github.com/nothings/stb) implementation and existing PNG writer.
 
@@ -302,3 +303,211 @@ and the gray roof Y=4. A 2-wide, 3-high doorway is centered on the negative-Z
 side. The default camera starts inside. The building uses ordinary editable,
 opaque, nonreflective blocks and is recreated on startup, like the rest of the
 unsaved world.
+
+### Default: direct lights and sky
+
+`mode = .direct` in `src/lighting.zig` enables point lights (including the sun and
+lamps) and ordered sky visibility. Normal probes and indirect GI are disabled;
+the legacy artistic face factor is also omitted so shading comes from the lights.
+Lighting samples each voxel face center and uses the persistent 9 MiB GPU face
+cache. Entries survive frames and camera movement, and are invalidated by world,
+streaming, or light changes. Misses compute the same lighting immediately instead
+of displaying pending black faces. This cache persists during the running session,
+not on disk across restarts.
+
+Skylight is cool blue (`0.6, 0.75, 1.0`, intensity `0.65`); the spawn sun is warm
+(`1.0, 0.825, 0.535`, intensity `0.75`). Their linear contributions are balanced to
+roughly neutral white on exposed ground beneath the sun without relying on RGB
+clipping. Since this sun is still a finite-range point light, distant ground gets
+less sunlight and a cooler sky-dominated tint. Lamp colors remain independent.
+
+### Experimental progressive global illumination
+
+`src/lighting.zig` selects the shader at build time with `mode`:
+`direct` (default), `global_illumination` (experimental), or `legacy` (original
+face-orientation shading). GI is retained for later tuning.
+There is no runtime shading-mode branch. Rebuild and restart after changing it.
+In GI mode, `LightingFeatures.sky_lighting`, `LightingFeatures.point_lights`,
+`gi_normal_probes`, and `gi_indirect` independently compile stages in or out.
+GI does not multiply diffuse transport by the legacy artistic face factor.
+
+Camera rays only look up a world voxel coordinate plus face index and enqueue
+missing/incomplete faces. A separate OpenGL 4.2 fragment pass consumes a persistent
+GPU FIFO; no compute shader, per-hit CPU readback, or full GI loop in the camera
+shader is required. New visible misses enter before refinements are requeued.
+Secondary hits request direct-only dependencies, so there are no recursive bounce
+jobs. Direct values are read only from earlier frames and remain immutable until
+invalidation. One diffuse bounce is currently supported.
+
+The stages are pending, direct-ready, indirect-partial, and converged. Pending or
+dirty entries show emission only, never a stale lighting result. A face-normal
+probe supplies a temporary first estimate from the surface it sees; it creates no
+light of its own. Its estimate is **replaced**, rather than added, when hemisphere
+samples arrive. The final estimate uses 64 deterministic Fibonacci hemisphere
+samples, in bit-reversed order, accumulated in batches of 1, 2, 4, 8, 8, ... .
+Uniform hemisphere sampling uses `2 * cos(theta)` weights for diffuse irradiance
+normalized by pi. Reflected albedo is bounded to 0.95; emissive radiance is added
+separately. `gi_max_radiance` bounds HDR cache values and non-finite values are
+rejected. Only cached **direct** light is bounced, preventing feedback cycles.
+
+Broad sky remains the ordered upward visibility probes described below. This is
+an artistic exposure approximation, not a full hemisphere sky integral. Normal
+and indirect rays that escape contribute zero additional sky, avoiding double
+counting; sky can still reach a receiver through a bounce from a sky-lit surface.
+Disabling sky visibility removes sky illumination from all stages. The above-spawn
+sun remains a finite-range colored point source, with varying direction and
+attenuation; it is not a directional sun. `point_attenuation` controls the softened
+inverse-square denominator. Glass passes diffuse/shadow probes without tint.
+
+Default limits: 262,144 face slots (22 MiB plus a small queue), 4,096 queued faces,
+256 jobs/frame, 8,192 rays/frame as a hard ceiling, and 512 voxels per indirect ray.
+With the default direct-light settings the scheduler caps work at 4,352 rays/frame
+(the lower job limit applies first). Each ray also has a 2,048 traversal-step cap.
+`gi_samples` must be a power of two; `gi_max_batch`, `gi_ray_budget`,
+`gi_max_jobs`, `gi_queue_capacity`, and `gi_max_distance` set the cost/quality tradeoff.
+Completed faces consume no more lighting rays. Unused, unqueued entries older
+than 120 frames are evicted in 1,024-slot maintenance slices. Full queues defer
+work; hash/capacity pressure uses the pending fallback and retries, never another
+surface's light. Dense scenes can take longer to refine or retain pending faces
+under sustained cache pressure.
+
+Existing `World.gpu_revision` invalidates conservatively across the whole cache
+when geometry/materials or the streamed region changes. Light descriptor changes
+also invalidate it; dirty state is represented by an old revision stamp. Merely
+moving the camera within the same streamed region or resizing the viewport does
+not discard samples. GI light selection is anchored to the streamed region's
+center, so camera motion does not change the selected set. Crossing streaming
+boundaries changes the known geometry domain and intentionally invalidates rays
+that previously assumed unloaded space was empty. Shader/config changes create a
+new cache. No duplicate edit/placement system or test structure is added.
+
+`zig build test-gi` checks all 16 feature combinations, both camera shader profiles,
+progressive convergence/color bleed, zero warm-cache rays, sky energy, camera
+motion, edits, streaming, wraparound, eviction, and queue overload under software EGL.
+`Cache.counters()` is an explicit diagnostic readback; the normal frame loop never
+calls it. `Features.diagnostics` enables per-pixel hit counters for profiling and
+is off in the application to avoid a global atomic on every pixel. Startup reports
+memory and budgets; tests report convergence, hit/miss counts, and software timings.
+These timings are not measurements of the RTX 3060.
+
+### Lighting
+
+`src/lighting.zig` is the central configuration. Set `LightingFeatures.face_shading`,
+`point_lights`, and `sky_lighting` independently and rebuild the executable. The
+loader injects GLSL defines after `#version`; disabled methods and their resources
+are preprocessed out. Explicit legacy test variants retain face-only and unlit
+material-color references; GI with all light sources disabled stays dark apart
+from emission. Selection rays do not shade surfaces.
+
+Sky lighting uses a blue ambient color separate from the background. A vertical
+visibility ray plus `sky_extra_ray_count` ordered rays approximate sky occlusion.
+The first four extras tilt 10° toward north (-Z), east (+X), south and west. The
+next four fill NE/SE/SW/NW at the same tilt. Each further group of eight forms a
+wider ring: 15°, 20°, etc., in 5° steps. Alternate rings rotate horizontally by
+22.5° to interleave their directions. These angles are configurable through
+`sky_first_ring_degrees`, `sky_ring_step_degrees`, and `sky_ring_rotation_degrees`;
+`sky_max_ring_degrees` keeps rays above the horizon. There is no random sampling.
+
+A tilted ray contributes `cos(tilt)` times the vertical ray's weight. Visible
+weights are divided by the total weight of **all** rays, including blocked ones,
+so more samples do not brighten fully open sky. Exposed walls retain a half-strength
+ambient factor; downward faces receive none. Use 0 extras for vertical-only,
+4 for the cardinal cross, 8 for the complete inner ring (default), or 12–16 to
+add the interleaved outer ring. More rays increase cache-fill cost, including
+reflections; target-GPU frame-time tuning remains workload dependent.
+
+A warm point light is created once above the initial camera position. Its height,
+color, intensity and radius are in the same configuration file. The default camera
+starts inside the existing roofed building: its roof blocks this light and the
+sky. Place a lamp through the Tab menu, remove roof blocks, or fly outside to
+inspect the lighting. Point lights use
+Lambert exposure, a smooth radius cutoff and softened inverse-square attenuation.
+Both point and sky visibility use the existing chunk/block/voxel hierarchy. Mono
+chunks and blocks remain solid at their available resolution, so coarse geometry
+can cast coarse shadows; full voxel generation is never required. Opaque material
+bytes block shadows. Glass currently passes visibility rays without tint or
+attenuation; transmission-aware shadows are a future extension.
+
+The CPU selects at most `max_lights` (default 8) from the active region and scene
+lights using distance divided by radius (region-center distance in GI; camera
+distance in the older direct-lighting variants). This keeps the broad sun relevant
+alongside nearby lamps and limits per-hit GPU work. Beyond that budget, lights may
+pop as the camera moves; tiled/clustered selection is a future scaling option.
+Light uniforms upload only when the selected descriptors change. Edit entries in
+`World.scene_lights` to change individual lights without shader recompilation.
+
+The Tab menu also offers **Cold White LED Stick**, **Warm White LED Stick**,
+**Neutral White LED Stick**, **Red LED Stick**, **Green LED Stick**, and
+**Blue LED Stick**. Each is a one-voxel-wide, six-voxel-tall glowing stick with
+a matching colored point light at its tip (radius 128 voxels, intensity 3).
+They use the usual placement, removal, streaming, and lighting-cache invalidation.
+
+Choose **Sci-Fi Lamp** in the Tab menu and place/remove it normally. It is a sparse
+cage with one-voxel-wide edges, two thin bars per face, and a cyan emitter voxel
+in the middle. The emitter glows independently of the point-light feature; the
+dark cage does not emit. The point light sits inside the emitter. Shadow rays
+pass through matching glowing material in the light source's own block, so an
+LED shaft does not shadow its own base. Opaque cage bars and other objects still
+cast shadows; sky rays receive no emitter exemption.
+The existing `.block` format now accepts:
+
+```text
+emission_color: 90, 220, 255
+# local x, y, z; radius; linear R, G, B; intensity (voxel units)
+light: 7.5, 7.5, 7.5, 128, 0.25, 0.8, 1, 3
+```
+
+`emission_color` identifies only matching palette entries (before a color override).
+`light` is optional and copied with the placed block. Replacing/removing the block
+removes its light; voxel removal keeps it until the last luminous voxel disappears.
+Active block lights are rebuilt from owned blocks whenever the GPU region changes,
+so leaving/reentering the region neither leaks nor duplicates them. World chunks
+currently remain cached in CPU memory; placements are not saved between runs.
+
+New lighting variants decode palette colors to linear RGB, combine illumination
+and emission, clamp, and gamma-encode once after optical compositing. The face-only
+and fully unlit variants retain the legacy display-color path. Inventory icons
+use a studio baseline. Visibility stops at the point-light endpoint or sky range /
+loaded-region boundary; unloaded geometry cannot occlude light. The traversal has
+a conservative step cap (exhaustion means occluded) and a finest-voxel epsilon
+that grows with floating-point world-coordinate precision.
+
+### Voxel-face lighting cache
+
+Direct lighting uses `face_cache = true` in
+`src/lighting.zig` to enable a persistent GPU cache for combined
+point and sky illumination. It evaluates lighting at the center of each finest
+voxel face, keyed by signed world voxel coordinates and face normal. Subsequent
+frames (including reflected views) reuse that illumination. Albedo, emission,
+face shading and optical compositing remain outside the cache. The sky ray count
+is unchanged. Point-light attenuation/exposure and all shadow/sky rays always use
+the voxel-face center, even if caching is disabled, cold, or full. Set
+`face_cache = false` and rebuild to compare performance without changing sampling:
+all pixels on the same voxel face receive the same illumination.
+
+For direct lighting, `face_cache_entries = 1 << 18` uses 9 MiB of image-buffer storage on
+both GL 4.2 and GL 4.6. Capacity must be a power of two. Full coordinate checks
+prevent hash collisions from mixing unrelated faces. Four probes bound lookup
+cost; collisions or a full table fall back to evaluating the same face-center
+sample. New entries are read starting with the next frame, after an image memory
+barrier. There is no spin-wait between fragment invocations. Cold frames still
+trace lighting rays and can be slower while the table fills.
+
+World GPU uploads and changes to the selected light descriptors invalidate the
+cache with a revision stamp, without clearing or uploading the whole table.
+Camera movement and reordering the same lights retain cached illumination. Newly
+streamed air and edits outside the GPU region no longer trigger unnecessary
+rebuilds/invalidation; moving into another region does. Empty-space primary and
+reflection rays now stop at the loaded-world boundary instead of exhausting
+hundreds of extra chunk steps, which particularly helps outdoor views.
+
+`zig build test-render` tests actual cache writes/reads, full-frame cold/warm
+consistency, forced hash collisions, all six normals, negative coordinates,
+light edits/removal, geometry edits, sky-shadow invalidation and region changes.
+It also benchmarks the existing building from inside, above its roof and outside
+its wall, with background generation and vsync excluded. A Mesa software-rendered
+640×360 run measured the desktop roof view at about 48 ms uncached versus 20 ms
+cached (2.4×), and the exterior wall at 13 ms versus 8 ms (1.6×), averaged over 20
+warm frames. Both comparisons include the traversal-bound fix. These are software
+OpenGL measurements, not RTX 3060 frame-rate predictions; cold frames and active
+streaming/editing have less reuse.
