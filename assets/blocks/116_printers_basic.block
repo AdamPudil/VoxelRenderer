@@ -1,0 +1,4 @@
+name: Printers Basic
+variant: 0
+model: 116_printers_basic.vox
+# Omit icon to render a 64x64 PNG with the engine.
