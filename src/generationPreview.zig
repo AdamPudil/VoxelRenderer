@@ -59,7 +59,11 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
-    const circular_lod = args.len > 1 and std.mem.eql(u8, args[1], "--lod");
+    if (args.len > 1 and std.mem.eql(u8, args[1], "--lod")) {
+        if (args.len > 3) return error.UnexpectedArgument;
+        return runtimePreview(allocator, if (args.len > 2) args[2] else "testOut/terrain-rings");
+    }
+    const circular_lod = args.len > 1 and std.mem.eql(u8, args[1], "--legacy-lod");
     const arg_start: usize = if (circular_lod) 2 else 1;
     const output_path = if (args.len > arg_start) args[arg_start] else "testOut/hierarchical";
     if (circular_lod and args.len > arg_start + 1) return error.UnexpectedArgument;
@@ -336,4 +340,89 @@ fn logTimingReport(timings: Timings, lod: bool, naive_ns: u64, superchunks_per_s
         logging.logger.printBoth("Refinement counts overlap; averages use refined chunks. Final counts use each chunk's finest detail.\n", .{});
     }
     logging.logger.printBoth("Generation only; image preparation and exports excluded.\n", .{});
+}
+
+/// Uses exactly the runtime demand builder, including transitions and balancing.
+/// Fixed camera path crosses signed superchunk boundaries and returns to origin.
+fn runtimePreview(allocator: std.mem.Allocator, output_path: []const u8) !void {
+    const rendering = @import("rendering.zig");
+    const terrain = @import("world/terrainHierarchy.zig");
+    const generator = @import("world/generation/terrainGenerator.zig");
+    try std.fs.cwd().makePath(output_path);
+    const log_path = try std.fs.path.join(allocator, &.{ output_path, "terrain-rings.csv" });
+    defer allocator.free(log_path);
+    const log_file = try std.fs.cwd().createFile(log_path, .{});
+    defer log_file.close();
+    const writer = log_file.writer();
+    try writer.writeAll("frame,focus_x,focus_z,worker_ms,requests,cache_hits,dependencies,cache_bytes,cache_peak,payload_bytes,worst_sample_ns,level1,level4,level16,level64,level256\n");
+    var sampler = try generator.Sampler.init(allocator, .{});
+    defer sampler.deinit();
+    var focus = rendering.FocusState{};
+    const window_side = @import("world/generation/terrainStreaming.zig").window_side;
+    const width = window_side * 32; // One preview pixel per eight voxels.
+    const heights = try allocator.alloc(i32, width * width);
+    defer allocator.free(heights);
+    const levels = try allocator.alloc(u8, width * width * 3);
+    defer allocator.free(levels);
+    const colors = [_][3]u8{ .{ 235, 76, 52 }, .{ 242, 170, 48 }, .{ 95, 180, 90 }, .{ 66, 157, 213 }, .{ 118, 86, 170 } };
+    for ([_][3]f32{ .{ 0, 0, 0 }, .{ 4090, 0, -32 }, .{ 4110, 0, -32 }, .{ 0, 0, 0 } }, 0..) |position, frame| {
+        const snapshot = try focus.resolve(rendering.terrain_settings, position);
+        const ox = @divFloor(@as(i32, @intFromFloat(position[0])), 256) - window_side / 2;
+        const oz = @divFloor(@as(i32, @intFromFloat(position[2])), 256) - window_side / 2;
+        var timer = try std.time.Timer.start();
+        const before = sampler.stats;
+        var counts: [5]usize = .{0} ** 5;
+        var bytes: usize = 0;
+        for (0..window_side) |tz| for (0..window_side) |tx| {
+            const x = (ox + @as(i32, @intCast(tx))) * 256;
+            const z = (oz + @as(i32, @intCast(tz))) * 256;
+            var builder = try terrain.Builder.init(allocator, x, z, snapshot, 1, 2 * 1024 * 1024);
+            defer builder.deinit();
+            while (!try builder.advance(&sampler, 2048, 2 * std.time.ns_per_ms)) {}
+            var tile = try builder.finish(1);
+            defer tile.deinit(allocator);
+            bytes += tile.nodes.len * @sizeOf(terrain.Node);
+            countTerrainLeaves(tile.nodes, 0, 4, &counts);
+            for (0..32) |pz| for (0..32) |px| {
+                const sample = tile.at(x + @as(i32, @intCast(px * 8)), z + @as(i32, @intCast(pz * 8)));
+                const index = (tz * 32 + pz) * width + tx * 32 + px;
+                heights[index] = sample.height;
+                const level = std.mem.indexOfScalar(u32, &rendering.cell_sizes, sample.side).?;
+                @memcpy(levels[index * 3 ..][0..3], &colors[level]);
+            };
+        };
+        const elapsed = timer.read();
+        var dependencies: u64 = 0;
+        for (before.generated, sampler.stats.generated) |a, b| dependencies += b - a;
+        try writer.print("{d},{d},{d},{d:.3},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n", .{
+            frame,                                      position[0],                      position[2],                   @as(f64, @floatFromInt(elapsed)) / std.time.ns_per_ms,
+            sampler.stats.requested - before.requested, sampler.stats.hits - before.hits, dependencies,                  sampler.budget.used,
+            sampler.budget.peak,                        bytes,                            sampler.stats.worst_sample_ns, counts[0],
+            counts[1],                                  counts[2],                        counts[3],                     counts[4],
+        });
+        std.debug.print("Terrain frame {d}: {d:.2} ms, leaves={any}, new dependencies={d}, cache={d}, payload={d}, worst sample={d} ns\n", .{
+            frame, @as(f64, @floatFromInt(elapsed)) / std.time.ns_per_ms, counts, dependencies, sampler.budget.used, bytes, sampler.stats.worst_sample_ns,
+        });
+        var timings = Timings{};
+        const preview = try makePreview(allocator, heights, width, 8, &timings);
+        defer preview.deinit(allocator);
+        var layout_buffer: [32]u8 = undefined;
+        const layout = try std.fmt.bufPrint(&layout_buffer, "rings_{d}", .{frame});
+        // exportPng uses the logger; this path prints its own concise report.
+        try runtimePng(allocator, output_path, "height", layout, width, 1, preview.heightmap);
+        try runtimePng(allocator, output_path, "terrain", layout, width, 3, preview.pixels);
+        try runtimePng(allocator, output_path, "levels", layout, width, 3, levels);
+    }
+}
+fn countTerrainLeaves(nodes: []const @import("world/terrainHierarchy.zig").Node, index: usize, level: usize, counts: *[5]usize) void {
+    if (nodes[index].children == 0) {
+        counts[level] += 1;
+        return;
+    }
+    for (0..16) |child| countTerrainLeaves(nodes, nodes[index].children + child, level - 1, counts);
+}
+fn runtimePng(allocator: std.mem.Allocator, directory: []const u8, prefix: []const u8, layout: []const u8, width: usize, channels: usize, pixels: []const u8) !void {
+    const name = try std.fmt.allocPrintZ(allocator, "{s}/{s}_{s}.png", .{ directory, prefix, layout });
+    defer allocator.free(name);
+    if (c.stbi_write_png(name.ptr, @intCast(width), @intCast(width), @intCast(channels), pixels.ptr, @intCast(width * channels)) == 0) return error.ImageWriteFailed;
 }

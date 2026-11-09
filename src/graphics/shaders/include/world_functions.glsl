@@ -104,6 +104,10 @@ int chunkSlot(ivec3 cc) {
 }
 
 ChunkHeader fetchChunkHeader(int slot) {
+#if VECTOR_WORLD_HEADERS
+    uvec4 words = texelFetch(uChunkHeaderTex, slot);
+    return ChunkHeader(words.x, words.y, words.z, words.w);
+#else
     int base = slot * 4;
     return ChunkHeader(
         texelFetch(uChunkHeaderTex, base + 0).r,
@@ -111,9 +115,14 @@ ChunkHeader fetchChunkHeader(int slot) {
         texelFetch(uChunkHeaderTex, base + 2).r,
         texelFetch(uChunkHeaderTex, base + 3).r
     );
+#endif
 }
 
 BlockHeader fetchBlockHeader(uint index) {
+#if VECTOR_WORLD_HEADERS
+    uvec4 words = texelFetch(uBlockHeaderTex, int(index));
+    return BlockHeader(words.x, words.y, words.z, words.w);
+#else
     int base = int(index) * 4;
     return BlockHeader(
         texelFetch(uBlockHeaderTex, base + 0).r,
@@ -121,9 +130,14 @@ BlockHeader fetchBlockHeader(uint index) {
         texelFetch(uBlockHeaderTex, base + 2).r,
         texelFetch(uBlockHeaderTex, base + 3).r
     );
+#endif
 }
 
 VoxelBlockHeader fetchVoxelBlockHeader(uint index) {
+#if VECTOR_WORLD_HEADERS
+    uvec4 words = texelFetch(uVoxelBlockHeaderTex, int(index));
+    return VoxelBlockHeader(words.x, words.y, words.z, words.w);
+#else
     int base = int(index) * 4;
     return VoxelBlockHeader(
         texelFetch(uVoxelBlockHeaderTex, base + 0).r,
@@ -131,6 +145,7 @@ VoxelBlockHeader fetchVoxelBlockHeader(uint index) {
         texelFetch(uVoxelBlockHeaderTex, base + 2).r,
         texelFetch(uVoxelBlockHeaderTex, base + 3).r
     );
+#endif
 }
 
 VoxelData decodeVoxel(uvec2 voxelPacked) {
@@ -236,6 +251,17 @@ VoxelData voxelAtWorld(ivec3 wp, BlockHeader bh) {
     VoxelBlockHeader vh = fetchVoxelBlockHeader(bh.data0);
     uint pIndex = voxelPaletteIndex(vh.index_base, localVoxel);
     return voxelFromPalette(vh.palette_base, pIndex);
+}
+
+// Occupancy and material lookup share the voxel header and local index. Keep
+// material bytes packed until shading actually needs floating-point channels.
+uvec2 voxelPackedAtWorld(ivec3 wp, BlockHeader bh) {
+    ivec3 local = localChunkVoxelToVoxelInBlock(worldToLocalVoxelInChunk(wp));
+    int index = localVoxelIndexInBlock(local);
+    VoxelBlockHeader vh = fetchVoxelBlockHeader(bh.data0);
+    if (!voxelBitSet(vh.bitmap_base, index)) return uvec2(0u);
+    int base = int(vh.palette_base + voxelPaletteIndex(vh.index_base, index) * 2u);
+    return uvec2(texelFetch(uPaletteTex, base).r, texelFetch(uPaletteTex, base + 1).r);
 }
 
 #endif

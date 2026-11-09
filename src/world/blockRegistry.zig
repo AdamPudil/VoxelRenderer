@@ -6,6 +6,7 @@ pub const Definition = struct {
     id: u32,
     name: []const u8,
     variant: u8,
+    rotation: @import("blockRotation.zig").Mode = .none,
     model_path: []const u8,
     icon_path: []const u8,
     generated_icon: bool,
@@ -96,7 +97,7 @@ pub const BlockRegistry = struct {
         const gop = try self.by_name.getOrPut(name);
         if (!gop.found_existing) gop.value_ptr.* = [_]?u32{null} ** 256;
         gop.value_ptr[meta.variant] = id;
-        self.blocks.appendAssumeCapacity(.{ .id = id, .name = name, .variant = meta.variant, .model_path = model_path, .icon_path = icon_path, .generated_icon = meta.icon == null, .model = model });
+        self.blocks.appendAssumeCapacity(.{ .id = id, .name = name, .variant = meta.variant, .rotation = meta.rotation, .model_path = model_path, .icon_path = icon_path, .generated_icon = meta.icon == null, .model = model });
     }
 };
 
@@ -111,6 +112,7 @@ test "sample registry has stable IDs, variants, independent models and preserves
     var registry = try BlockRegistry.loadDirectory(a, path);
     defer registry.deinit();
     try std.testing.expectEqual(@as(usize, 37), registry.blocks.items.len);
+    try std.testing.expectEqual(@import("blockRotation.zig").Mode.none, registry.blocks.items[0].rotation);
     try std.testing.expectEqual(@as(?u32, 3), registry.find("Checker", 0));
     try std.testing.expectEqual(@as(?u32, 4), registry.find("Checker", 1));
     try std.testing.expect(registry.find("Checker", 2) == null);
@@ -131,12 +133,13 @@ test "sample registry has stable IDs, variants, independent models and preserves
     defer clone.deinit(a);
     clone.blockData.voxel.clearVoxel(0, 0, 0);
     try std.testing.expect(registry.blocks.items[0].model.blockData.voxel.isOccupied(0, 0, 0));
-    try tmp.dir.writeFile(.{ .sub_path = "01_red.block", .data = "name: My Red\nvariant: 2\nmodel: 01_red.vox\nicon: custom.png\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "01_red.block", .data = "name: My Red\nvariant: 2\nmodel: 01_red.vox\nicon: custom.png\nrotation: yaw\n" });
     try samples.ensure(a, path);
     var updated = try BlockRegistry.loadDirectory(a, path);
     defer updated.deinit();
     try std.testing.expectEqual(@as(?u32, 0), updated.find("My Red", 2));
     try std.testing.expect(!updated.blocks.items[0].generated_icon);
+    try std.testing.expectEqual(@import("blockRotation.zig").Mode.yaw, updated.blocks.items[0].rotation);
     try tmp.dir.writeFile(.{ .sub_path = "duplicate.block", .data = "name: My Red\nvariant: 2\nmodel: 01_red.vox\n" });
     try std.testing.expectError(error.DuplicateBlockNameAndVariant, BlockRegistry.loadDirectory(a, path));
 }

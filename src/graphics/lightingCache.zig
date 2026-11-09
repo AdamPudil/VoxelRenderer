@@ -30,10 +30,13 @@ pub const Cache = struct {
     textures: [3]c_uint = .{ 0, 0, 0 },
     frame_loc: c_int = -1,
     valid_from_loc: c_int = -1,
+    budget_loc: c_int = -1,
+    population_budget: u32 = settings.face_cache_entries,
     clock: Clock = .{},
 
     pub fn init(program: c_uint) !Cache {
         var self = Cache{ .frame_loc = gl.getUniformLocation(program, "uLightingCacheFrame"), .valid_from_loc = gl.getUniformLocation(program, "uLightingCacheValidFrom") };
+        self.budget_loc = gl.getUniformLocation(program, "uLightingCacheBudget");
         if (self.frame_loc < 0) return self;
         comptime std.debug.assert(std.math.isPowerOfTwo(settings.face_cache_entries));
         var limit: c_int = 0;
@@ -56,7 +59,15 @@ pub const Cache = struct {
             gl.bindTexture(c.GL_TEXTURE_BUFFER, self.textures[i]);
             try gl.texBuffer(c.GL_TEXTURE_BUFFER, formats[i], self.buffers[i]);
         }
+        // Reference draws can run before begin(). Keep the shader image
+        // resources valid even while its frame uniform disables cache access.
+        self.bindImages();
         return self;
+    }
+
+    fn bindImages(self: *const Cache) void {
+        const formats = [_]c_uint{ c.GL_R32UI, c.GL_RGBA32I, c.GL_RGBA32F };
+        for (self.textures, 0..) |texture, i| c.__glewBindImageTexture.?(@intCast(i), texture, 0, c.GL_FALSE, 0, c.GL_READ_WRITE, formats[i]);
     }
 
     fn clearStamps(self: *Cache) !void {
@@ -81,12 +92,13 @@ pub const Cache = struct {
             c.__glewMemoryBarrier.?(c.GL_BUFFER_UPDATE_BARRIER_BIT);
             try self.clearStamps();
         }
-        const formats = [_]c_uint{ c.GL_R32UI, c.GL_RGBA32I, c.GL_RGBA32F };
-        for (self.textures, 0..) |texture, i| c.__glewBindImageTexture.?(@intCast(i), texture, 0, c.GL_FALSE, 0, c.GL_READ_WRITE, formats[i]);
+        self.bindImages();
+        c.__glewUniform1ui.?(self.budget_loc, @min(self.population_budget, settings.face_cache_entries));
         c.__glewUniform1ui.?(self.frame_loc, self.clock.frame);
         c.__glewUniform1ui.?(self.valid_from_loc, self.clock.valid_from);
     }
 
+    /// Publication barrier only. Direct illumination is evaluated during the world draw.
     pub fn end(self: *const Cache) void {
         if (self.frame_loc < 0) return;
         c.__glewMemoryBarrier.?(c.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);

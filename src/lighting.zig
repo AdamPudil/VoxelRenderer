@@ -2,7 +2,10 @@
 const std = @import("std");
 
 pub const Mode = enum { legacy, direct, global_illumination };
+// Direct illumination from light objects and sky visibility.
 pub const mode: Mode = .direct;
+// Zero disables the distance cutoff; two lights geometry rings 0 and 1.
+pub const direct_geometry_ring_count: u32 = 2;
 pub const gi_normal_probes = true;
 pub const gi_indirect = true;
 pub const gi_samples = 64; // power of two: bit reversal is an exact permutation
@@ -17,9 +20,13 @@ pub const gi_maintenance_slots = 1024;
 pub const point_attenuation: f32 = 16;
 
 pub fn applicationFeatures() Features {
-    if (mode == .legacy) return .{ .point_lights = false, .sky_lighting = false };
-    if (mode == .direct) return .{ .mode = .direct, .face_shading = false, .normal_probes = false, .indirect = false };
-    return .{ .mode = mode, .normal_probes = gi_normal_probes, .indirect = gi_indirect };
+    return featuresForMode(mode);
+}
+
+pub fn featuresForMode(selected: Mode) Features {
+    if (selected == .legacy) return .{ .point_lights = false, .sky_lighting = false };
+    if (selected == .direct) return .{ .mode = .direct, .face_shading = false, .normal_probes = false, .indirect = false, .direct_geometry_ring_count = direct_geometry_ring_count };
+    return .{ .mode = selected, .normal_probes = gi_normal_probes, .indirect = gi_indirect };
 }
 
 pub fn hemisphereIndex(index: u32) u32 {
@@ -33,12 +40,14 @@ pub const LightingFeatures = struct {
     pub const point_lights = true;
     pub const sky_lighting = true;
 };
-// Lighting always samples the center of each finest-voxel face. Disabling
-// caching changes reuse only in the older direct-lighting variants. GI always
+// Direct lighting can share compatible cell faces through rendering.zig rings.
+// Disabling caching changes reuse only, preserving the selected sample. GI always
 // uses its queued cache: 2^18 entries use 22 MiB (9 MiB for the older cache).
 pub const face_cache = true;
 pub const face_cache_entries = 1 << 18;
 pub const Features = struct {
+    terrain_overlay_skips: bool = @import("build_options").terrain_overlay_skips,
+    direct_geometry_ring_count: u32 = 0, // reference/tools retain unlimited direct lighting
     mode: Mode = .legacy, // explicit reference/test variants retain their old behavior
     normal_probes: bool = true,
     indirect: bool = true,
@@ -110,6 +119,14 @@ pub fn specialize(a: std.mem.Allocator, source: []const u8, features: Features, 
     errdefer out.deinit();
     try out.appendSlice(preamble);
     const writer = out.writer();
+    try writer.print("#define TERRAIN_OVERLAY_SKIPS {d}\n", .{@intFromBool(features.terrain_overlay_skips)});
+    try writer.print("#define DIRECT_GEOMETRY_RING_COUNT {d}\n", .{features.direct_geometry_ring_count});
+    const hierarchy = @import("rendering.zig");
+    try writer.print("#define HIERARCHY_MAX_RINGS {d}\n#define HIERARCHY_FACTOR {d}\n" ++
+        "#define HIERARCHY_VOXEL_GROUP {d}\n#define HIERARCHY_BLOCK_SIZE {d}\n" ++
+        "#define HIERARCHY_BLOCK_GROUP {d}\n#define HIERARCHY_CHUNK_SIZE {d}\n", .{
+        hierarchy.max_rings, hierarchy.refinement, hierarchy.cell_sizes[1], hierarchy.cell_sizes[2], hierarchy.cell_sizes[3], hierarchy.cell_sizes[4],
+    });
     try writer.print("#define USE_GI {d}\n#define GI_NORMAL_PROBES {d}\n#define GI_INDIRECT {d}\n#define GI_DIAGNOSTICS {d}\n" ++
         "#define GI_SAMPLES {d}\n#define GI_SAMPLE_BITS {d}\n#define GI_MAX_BATCH {d}\n" ++
         "#define GI_QUEUE_CAPACITY {d}\n#define GI_MAX_JOBS {d}\n#define GI_MAX_DISTANCE {d:.6}\n#define GI_MAX_RADIANCE {d:.6}\n" ++

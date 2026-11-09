@@ -1,4 +1,5 @@
 name: Baseassets1 Wall Foundation
 variant: 0
 model: 106_baseassets1_wall_foundation.vox
+rotation: yaw
 # Omit icon to render a 64x64 PNG with the engine.

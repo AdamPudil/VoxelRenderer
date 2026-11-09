@@ -4,6 +4,7 @@
 #include "constants.glsl"
 #include "uniforms.glsl"
 #include "world_functions.glsl"
+#include "direct_diagnostics.glsl"
 
 vec3 getRay(vec2 fragCoord) {
     float aspect = uResolution.x / uResolution.y;
@@ -22,6 +23,14 @@ vec3 getRay(vec2 fragCoord) {
     vec3 up = normalize(cross(right, forward));
 
     return normalize(forward + p.x * right + p.y * up);
+}
+
+ivec3 rayOwnedCell(vec3 position, vec3 direction) {
+    ivec3 cell = ivec3(floor(position));
+    for (int axis = 0; axis < 3; ++axis) {
+        if (direction[axis] < 0.0 && position[axis] == float(cell[axis])) cell[axis] -= 1;
+    }
+    return cell;
 }
 
 // Advance every coordinate to the ray's exit from an empty region.
@@ -44,7 +53,14 @@ void skipEmptyRegion(vec3 pos, vec3 dir, int size,
     // That can bounce a ray between two empty regions until its step budget
     // expires and creates a false shadow. Keep non-exit axes in the current
     // region; only axes whose exit time is reached may cross its boundary.
-    v = clamp(ivec3(floor(pos + dir * t)), lower, upper - ivec3(1));
+    vec3 crossingPoint = pos + dir * t;
+    ivec3 crossed = ivec3(floor(crossingPoint));
+    // A negative ray owns the voxel below an integer face even when that face
+    // lies inside the skipped coarse cube (not just on its exit boundary).
+    for (int i = 0; i < 3; ++i) {
+        if (dir[i] < 0.0 && crossingPoint[i] == float(crossed[i])) crossed[i] -= 1;
+    }
+    v = clamp(crossed, lower, upper - ivec3(1));
     // Exact boundary ownership, including negative rays and corner ties.
     for (int i = 0; i < 3; i++) {
         if (exitTimes[i] == t) v[i] = dir[i] > 0.0 ? upper[i] : lower[i] - 1;
@@ -61,19 +77,66 @@ void skipEmptyRegion(vec3 pos, vec3 dir, int size,
 bool isAir(VoxelData v) { return v.opacity == 0.0 && v.ior == 0.0; }
 bool isGlass(VoxelData v) { return v.ior > 0.0 && v.opacity < 1.0; }
 
-VoxelData sampleMaterial(ivec3 cell, out int regionSize) {
-    bool valid;
-    int slot;
-    ChunkHeader ch = chunkHeaderAtWorld(cell, valid, slot);
+#include "hierarchy.glsl"
+
+uniform bool uHierarchyReference;
+// Original chunk -> block -> voxel path, retained for A/B traversal checks.
+uvec2 sampleReferencePacked(ivec3 cell, ChunkHeader ch, out int regionSize) {
     regionSize = CHUNK_VOXEL_SIZE;
-    if (!valid || ch.state == uint(CHUNK_STATE_FREE)) return decodeVoxel(uvec2(0u));
-    if (ch.state == uint(CHUNK_STATE_MONO)) return decodeVoxel(uvec2(ch.data0, ch.data1));
+    if (ch.state == 0u) return uvec2(0u);
+    if (ch.state == 1u) return uvec2(ch.data0, ch.data1);
+    if (ch.state == 3u) return sampleTerrainPacked(cell, ch, regionSize);
     BlockHeader bh = blockHeaderAtWorld(cell, ch);
     regionSize = BLOCK_SIZE;
-    if (bh.state == uint(BLOCK_STATE_FREE)) return decodeVoxel(uvec2(0u));
-    if (bh.state == uint(BLOCK_STATE_MONO)) return decodeVoxel(uvec2(bh.data0, bh.data1));
+    if (bh.state == 0u) return uvec2(0u);
+    if (bh.state == 1u) return uvec2(bh.data0, bh.data1);
     regionSize = 1;
-    return voxelPresentAtWorld(cell, bh) ? voxelAtWorld(cell, bh) : decodeVoxel(uvec2(0u));
+    return voxelPackedAtWorld(cell, bh);
+}
+uvec2 sampleMaterialPacked(ivec3 cell, ChunkHeader ch, out int regionSize) {
+    if (uHierarchyReference) return sampleReferencePacked(cell, ch, regionSize);
+    return sampleHierarchyPacked(cell, ch, regionSize, false, HIERARCHY_CHUNK_SIZE);
+}
+// Authored visibility remains exact. Terrain visibility uses the same published
+// column geometry for primary, shadow and GI rays. CPU interactions require exact data.
+VoxelData sampleMaterial(ivec3 cell, out int regionSize) {
+    bool valid; int slot;
+    ChunkHeader ch = chunkHeaderAtWorld(cell, valid, slot);
+    return decodeVoxel(sampleMaterialPacked(cell, ch, regionSize));
+}
+VoxelData sampleRenderMaterial(ivec3 cell, out int regionSize) {
+    bool valid; int slot;
+    ChunkHeader ch = chunkHeaderAtWorld(cell, valid, slot);
+    // Occupancy transitions are atomic; material blending cannot morph columns.
+    if (valid && ch.state == 3u) return sampleTerrain(cell, ch, regionSize);
+    if (uHierarchyReference) return decodeVoxel(sampleReferencePacked(cell, ch, regionSize));
+    VoxelData material = decodeVoxel(sampleHierarchyPacked(cell, ch, regionSize, true, HIERARCHY_CHUNK_SIZE));
+    float weight = hierarchyWeight(cell, regionSize, false);
+    if (regionSize > 1 && weight > 0.0 && weight < 1.0) {
+        vec3 color = material.color * weight;
+        float reflectiveness = material.reflectiveness * weight;
+        float metallic = material.metallic * weight;
+        float remaining = 1.0 - weight;
+        int size = regionSize;
+        // Blend toward the child that was already selected by the finer rings.
+        // Overlapping transition bands compose without resetting to level one.
+        for (int level = 0; level < 4; ++level) {
+            int childSize;
+            VoxelData child = sampleHierarchy(cell, childSize, true, max(1, size / HIERARCHY_FACTOR));
+            float childWeight = hierarchyWeight(cell, childSize, false);
+            if (childSize == 1 || childSize >= size || childWeight <= 0.0) childWeight = 1.0;
+            color += remaining * childWeight * child.color;
+            reflectiveness += remaining * childWeight * child.reflectiveness;
+            metallic += remaining * childWeight * child.metallic;
+            remaining *= 1.0 - childWeight;
+            if (remaining <= 0.0) break;
+            size = childSize;
+        }
+        material.color = color;
+        material.reflectiveness = reflectiveness;
+        material.metallic = metallic;
+    }
+    return material;
 }
 
 #include "lighting.glsl"
@@ -89,8 +152,8 @@ bool sameMedium(VoxelData a, VoxelData b) {
 // always face the incident ray, including glass-to-air exit boundaries.
 bool traceBoundary(vec3 pos, vec3 dir, VoxelData medium, out ivec3 cell,
                    out vec3 normal, out vec3 point, out float distance,
-                   out VoxelData material) {
-    cell = ivec3(floor(pos));
+                   out VoxelData material, bool renderLod) {
+    cell = rayOwnedCell(pos, dir);
     normal = vec3(0.0);
     point = pos;
     distance = 0.0;
@@ -98,7 +161,7 @@ bool traceBoundary(vec3 pos, vec3 dir, VoxelData medium, out ivec3 cell,
     vec3 stepDir = sign(dir);
     vec3 tDelta = vec3(1e30);
     vec3 tMax = vec3(1e30);
-    vec3 next = floor(pos) + max(stepDir, vec3(0.0));
+    vec3 next = vec3(cell) + max(stepDir, vec3(0.0));
     for (int axis = 0; axis < 3; axis++) {
         if (dir[axis] != 0.0) {
             tDelta[axis] = abs(1.0 / dir[axis]);
@@ -106,12 +169,13 @@ bool traceBoundary(vec3 pos, vec3 dir, VoxelData medium, out ivec3 cell,
         }
     }
     for (int i = 0; i < renderDistance; i++) {
+        DIAG_STEPS();
         // No GPU geometry exists beyond this convex volume. In outdoor views,
         // misses used to walk hundreds more empty chunks before exhausting DDA.
         // Glass still needs its final glass-to-air interface at the region edge.
         if (!chunkInRegion(worldToChunkCoord(cell)) && isAir(medium)) return false;
         int regionSize;
-        material = sampleMaterial(cell, regionSize);
+        material = renderLod ? sampleRenderMaterial(cell, regionSize) : sampleMaterial(cell, regionSize);
         if (!sameMedium(material, medium)) {
             if (dot(normal, normal) > 0.0) {
                 vec3 face = vec3(cell) + max(normal, vec3(0.0));
@@ -125,12 +189,19 @@ bool traceBoundary(vec3 pos, vec3 dir, VoxelData medium, out ivec3 cell,
         } else {
             int axis = tMax.x < tMax.y ? 0 : 1;
             if (tMax.z < tMax[axis]) axis = 2;
-            cell[axis] += int(stepDir[axis]);
-            tMax[axis] += tDelta[axis];
+            float crossing = tMax[axis];
+            // Half-open voxel ownership: edge/corner ties cross every tied axis.
+            for (int j = 0; j < 3; ++j) {
+                if (tMax[j] == crossing) {
+                    cell[j] += int(stepDir[j]);
+                    tMax[j] += tDelta[j];
+                }
+            }
             normal = vec3(0.0);
             normal[axis] = -stepDir[axis];
         }
     }
+    DIAG_EXHAUSTED();
     return false;
 }
 
@@ -140,7 +211,8 @@ vec4 castTraceRay(vec3 pos, vec3 dir, out ivec3 hitVoxel,
     VoxelData material;
     vec3 point;
     float distance;
-    hit = traceBoundary(pos, dir, decodeVoxel(uvec2(0u)), hitVoxel, hitNormal, point, distance, material);
+    hit = traceBoundary(pos, dir, decodeVoxel(uvec2(0u)), hitVoxel, hitNormal, point, distance, material, false);
+    if (hit && !hierarchyInteractionAvailable(hitVoxel)) hit = false;
     return vec4(0.0); // selection needs geometry only
 }
 
@@ -167,6 +239,8 @@ struct OpticalRay {
 // Color/opacity are specified per 16 voxels of travel, not per internal voxel face.
 vec4 castReflectedRay(vec3 pos, vec3 dir, out ivec3 hitVoxel,
                      out vec3 hitNormal, out bool hit) {
+    DIAG_ADD(0);
+    DIAG_CONTEXT(0);
     const int maxSegments = 32;
     const int maxReflections = 6;
     const int maxInterfaces = 12;
@@ -187,7 +261,9 @@ vec4 castReflectedRay(vec3 pos, vec3 dir, out ivec3 hitVoxel,
         vec3 normal, point;
         float distance;
         VoxelData material;
-        bool found = traceBoundary(ray.pos, ray.dir, ray.medium, cell, normal, point, distance, material);
+        DIAG_CONTEXT(segment == 0 ? 0 : 1);
+        DIAG_ADD(segment == 0 ? 11 : 12);
+        bool found = traceBoundary(ray.pos, ray.dir, ray.medium, cell, normal, point, distance, material, true);
         if (segment == 0 && !hit) {
             hit = found;
             hitVoxel = cell;

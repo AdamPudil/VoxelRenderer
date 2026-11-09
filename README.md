@@ -17,10 +17,20 @@
 
 ## GPU detection and shader profiles
 
+For a low-FPS comparison, use an optimized build and compare
+`zig build run -Doptimize=ReleaseSafe -- --lighting=direct --gpu-stats`
+with `--lighting=face` in the same stationary view after streaming settles.
+The default remains direct lighting with the configured ring cutoff. The face
+mode compiles out point/sky lighting and their cache; terrain and optical
+traversal remain enabled. Startup reports the actual GPU, build mode and lighting
+mode, and `--gpu-stats` also prints framebuffer size and batched GPU timings.
+
 Run from the repository root:
 
 ```sh
 zig build run -- --gpu-info
+zig build run -- --shader=rtx3060
+zig build run -- --shader=vega56
 zig build run -- --shader=thinkpad
 zig build run -- --shader=desktop
 ```
@@ -31,23 +41,174 @@ compiles/links the selected shaders, then exits before generating the world.
 It needs a working graphical session and GPU driver. These are the capabilities
 of the active context, not a list of all installed GPUs or their VRAM sizes.
 
-The default `--shader=auto` selects the desktop profile for a renderer containing
-`RTX 3060` when OpenGL 4.6 is available; other renderers use the existing ThinkPad
-profile. Selection does not switch GPUs on machines with multiple adapters.
+The default `--shader=auto` identifies the active GPU at runtime from the OpenGL
+vendor and renderer strings, using case-insensitive model matching:
+
+- Explicit RTX 3060 names select `rtx3060` (RTX 3060 Ti is a separate model).
+- Explicit Radeon Vega 56 names select `vega56`.
+- Generic Radeon RX Vega / VEGA10 names select `vega`; startup reports that the
+  exact model is not identified. Integrated Vega 8/10 Graphics do not match this
+  discrete-GPU family. Use `--shader=vega56` to override an ambiguous name.
+- Unknown GPUs retain the `thinkpad` compatibility profile.
+
+Device profiles use the desktop shader when OpenGL 4.6 is available; automatic
+selection falls back to compatibility shaders on a 4.2 context while still
+reporting the detected device. Selection does not switch GPUs on machines with
+multiple adapters. Model names are not performance rankings or VRAM queries.
 
 - `thinkpad`: existing `src/graphics/shaders/voxel.vs` (GLSL 3.30) and
   `voxel.fs` (GLSL 4.20), requiring an OpenGL 4.2 context.
 - `desktop`: separate `src/graphics/shaders/desktop/voxel.vs` and `voxel.fs`
   entry points targeting GLSL 4.60, requiring OpenGL 4.6.
+- `rtx3060`, `vega56`, `vega`: independent selection names currently sharing
+  the desktop entry points and settings. They provide a place for future measured
+  device-specific tuning; Vega is not assigned lower quality or smaller budgets.
 
 Startup requests OpenGL 4.6, falling back to 4.2. An explicitly selected desktop
-profile fails with a diagnostic if 4.6 is unavailable. Shader compilation errors
+or device profile fails with a diagnostic if 4.6 is unavailable. Shader compilation errors
 are reported rather than silently switching profiles.
 
 The desktop profile initially shares traversal and world-data code with the
 ThinkPad profile. It is a starting point for separate desktop shader development;
 it does not yet introduce RTX-specific acceleration, increase the VRAM budget,
 or promise faster rendering. Changing the GLSL version alone is not an optimization.
+
+The RTX 3060 header-fetch experiment can be compared using
+`zig build run -Doptimize=ReleaseSafe -Dvector-world-headers=true -- --shader=rtx3060 --gpu-stats`.
+Use `-Dvector-world-headers=false` for the default scalar baseline. The candidate
+fetches each chunk/block/voxel header as one four-component texture record;
+terrain nodes and rendering quality are unchanged. `--gpu-stats` reports
+asynchronous per-pass median, p95, p99 and maximum GPU milliseconds in 120-sample batches.
+Compare the same stationary view after streaming settles. Hardware gains have
+not been measured; see the [RTX 3060 investigation](plans/todo/rtx3060_shader_performance.md).
+
+## CPU and GPU profiling
+
+Use an optimized build from the repository root:
+
+```sh
+zig build run -Doptimize=ReleaseSafe -- --profile
+# Optional per-frame CSV (enables both CPU and GPU profiling):
+mkdir -p logs
+zig build run -Doptimize=ReleaseSafe -- --profile-csv=logs/profile.csv
+# Include existing terrain worker build/queue and upload diagnostics:
+zig build run -Doptimize=ReleaseSafe -- --profile --terrain-stats
+```
+
+Profiling is off by default. `--profile` prints median, p95, p99 and maximum
+milliseconds in batches of 120 samples, plus a partial batch on normal exit.
+`--gpu-stats` enables just the GPU side. Framebuffer dimensions, device, shader,
+lighting mode and build mode are printed at startup. Compare the same resolution
+and camera view after streaming settles; initial frames include warm-up work.
+
+CPU stages cover input/setup, streaming and uploads, editing, render preparation,
+world draw submission, lighting-cache publication, GI submission, menu, buffer
+swap, and housekeeping (including screenshots and FPS logging). These are
+**main-thread wall times**, including driver waits, rather than CPU utilization
+or sampled call stacks. `total` covers those stages; profiler collection and
+report/CSV writing are outside that interval. Background terrain worker timings
+are reported separately by `--terrain-stats`. Minimized frames are excluded.
+
+GPU stages cover cache preparation, the world draw, lighting-cache publication,
+GI update, and menu rendering. GPU `total` is the sum of those measured passes;
+it excludes terrain uploads, clearing, presentation and gaps between passes.
+CPU and GPU overlap, so their totals should not be added together. Timestamp
+intervals can include GPU stalls or starvation; they are not shader instruction
+or utilization counters. The `swap` CPU stage helps expose presentation/driver
+waits; profiling does not change swap interval or rendering quality.
+
+The profiler uses an eight-frame ring of [OpenGL timestamp queries](https://registry.khronos.org/OpenGL/extensions/ARB/ARB_timer_query.txt).
+It polls availability before reading results and skips GPU samples if all slots
+are busy. Collection never waits for timing results. Controlled benchmark exit polls for
+up to two seconds outside measurement to drain completed queries. Shutdown reports skipped and still
+pending samples; pending GPU results may be absent from a short capture. A
+context without timestamp support disables the GPU side with a diagnostic.
+
+CSV output retains `frame,domain,stage,ms` columns (`domain` is `cpu`, `gpu`, or
+`cadence`). `cadence,frame_interval` measures the full frame including profiler
+and log overhead, attributed to the originating frame. Existing CPU/GPU stage
+names and totals are unchanged. GPU
+rows arrive later and retain the originating frame number; join on `frame`, not
+row order. The file is overwritten on launch, buffered, and flushed on normal
+exit. Its parent directory must exist. CSV and console output add overhead, so
+use matching capture options for comparisons. A write failure disables CSV
+output with a diagnostic while profiling continues.
+
+```sh
+zig build test-profile       # percentiles, CPU stages, disabled mode, CSV
+zig build test-profile-gpu   # Mesa/EGL queries, ring reuse, GPU frame IDs
+```
+
+Stationary benchmarks freeze camera movement and editing, wait for the full
+requested terrain publication, require stable geometry/light revisions, then run
+warm-up and measured frames. All phases remain in the CSV; the frame sidecar
+labels `settling`, `warmup`, and `measured`, so cold/streaming costs are retained.
+A revision change during measurement fails the run. `--benchmark-max-frames`
+bounds startup/settling (default 10000). An interrupted or unsettled benchmark
+returns an error and records `complete: false`.
+
+```sh
+mkdir -p logs
+zig build -Doptimize=ReleaseSafe
+./zig-out/bin/voxel --world=terrain --lighting=direct \
+  --camera=100,453,100 --camera-angles=3.14,-0.15 --framebuffer=1920x1008 \
+  --benchmark-frames=300 --benchmark-warmup=120 --benchmark-settle=60 \
+  --swap-interval=0 --profile-csv=logs/direct-1.csv
+python3 utils/compare_profiles.py logs/direct-1.csv logs/direct-2.csv logs/direct-3.csv
+python3 utils/compare_profiles.py logs/direct-1.csv --phase=all --start=1 --end=40 --json
+```
+
+Camera angles are yaw/pitch in radians. Explicit camera position bypasses automatic
+terrain spawn-height adjustment. Without `--camera`, the default spawn is resolved
+before warm-up; the actual pose is recorded. `--framebuffer=WxH` requests pixel
+dimensions and rejects a mismatch. Benchmark windows are hidden by default;
+`--benchmark-visible` enables visual/presentation checks. Match visibility between
+runs. `--swap-interval=0|1` is explicit; omitting it preserves the normal platform
+default. The metadata records the request, not a claim that the driver honored it.
+Benchmark/diagnostic mode enables CPU/GPU profiling and defaults to
+`logs/benchmark.csv` if no CSV path is supplied. Captures overwrite their paths.
+
+Each timing CSV has `.meta.json` and `.frames.csv` sidecars. Metadata includes GPU,
+driver, build mode/compiler, content hashes of build-time and runtime source
+(including modified/untracked files), assets, shader flags, generation and ring
+settings, lighting, uploads, framebuffer, camera options, and dropped/pending GPU
+samples. Per-frame context records camera, geometry/light revisions, cache
+invalidation stamps, upload bytes, and GPU allocation. Generated icons are excluded
+from source identity. A null metadata `result` indicates an unfinished/crashed run.
+The comparison tool selects phases/frame ranges, reports sample counts,
+median/p95/p99, stage shares, missing samples, metadata differences and variation
+across identical repeated configurations. It supports old timing CSVs, but warns
+that phase/comparability data is unavailable. It never treats an unmatched timing
+difference as an accepted optimization.
+
+Add `--direct-diagnostics=64` to compile sampled direct-lighting instrumentation
+(one spatially hashed pixel in 64); `1` counts every fragment, and powers of two
+through 65536 are supported. Normal shaders compile out all counters and resources.
+The extra `.diagnostics.csv` reports raw sampled cache lookups/hits/misses,
+ownership/pending/collision/probe/window outcomes, actual lighting evaluations,
+point/sky visibility rays, primary/optical rays, traversal steps, hierarchy record
+visits and step exhaustion. These are algorithmic counts, not hardware counters;
+node counts include lighting-level queries in the owning primary/optical context.
+Selection vertex work and icons are excluded. `same_frame_pending` means an occupied
+slot in this draw, which may belong to another key; it is not proof of a duplicate
+face. Evaluation counts include uncached/zero-normal fallbacks as well as misses.
+
+Counters use 64 shards, low/high carry words and eight fenced readback buffers
+(112 KiB). Busy buffers drop a diagnostic sample rather than wait or overwrite.
+Frame/revision/stamp fields correlate counters with invalidation and ordinary
+capture phases. Report instrumentation overhead against matched captures without
+`--direct-diagnostics`; diagnostic GPU times are not production timings.
+`lighting_cache` is only a publication barrier: direct evaluation belongs to `world`.
+Use at least 300 measured frames, three repetitions, and alternating order for
+baseline/candidate experiments. Keep camera routes, edited/optical scene coverage,
+cache redesign and traversal experiments gated on the measurements described in
+[the optimization plan](plans/todo/profile_guided_optimization.md).
+
+```sh
+zig build test-profile -Doptimize=ReleaseSafe
+zig build test-profile-gpu -Doptimize=ReleaseSafe
+python3 -m unittest discover -s utils -p test_compare_profiles.py
+```
 
 ## Block models, icons and building
 
@@ -97,6 +258,30 @@ keys are case-insensitive. `variant` defaults to 0 and must fit in a `u8`.
 Blank lines and full-line `#` comments are supported. Values may be quoted.
 Names are case-sensitive, and `(name, variant)` pairs must be unique. Paths are
 relative to the descriptor's directory. Custom icons must be PNG files.
+
+Add `rotation: yaw` to a descriptor to orient it when placed. The model's front
+is engine-local **+Z** (after VOX import), and **+Y** stays upright. Its front faces
+toward the player, snapping to the nearest horizontal cardinal direction:
+
+| Looking toward | Placed model's front |
+| --- | --- |
+| +Z | -Z |
+| +X | -X |
+| -Z | +Z |
+| -X | +X |
+
+Exact diagonal ties use Z; looking straight up/down retains the camera heading.
+The block stays fixed after placement. Geometry, materials, and attached lights
+rotate together, including for ray picking and voxel removal. `rotation: none`
+(the default when omitted) keeps the authored orientation. Keys and rotation
+values are case-insensitive; unsupported modes are rejected. Both descriptor
+formats support this setting. Vertical rotation and arbitrary angles are not
+supported yet.
+
+**Shipassets Handle** is enabled as an asymmetric example. Its base lies on the
+local -Z side and its grip projects toward +Z. Other blocks retain their existing
+defaults. Inventory icons show the authored orientation. The GOX exporter preserves
+an existing descriptor's `rotation` attribute when re-exporting its model.
 
 Reflective blocks use the extended, backward-compatible `.block` format:
 
@@ -304,7 +489,15 @@ side. The default camera starts inside. The building uses ordinary editable,
 opaque, nonreflective blocks and is recreated on startup, like the rest of the
 unsaved world.
 
-### Default: direct lights and sky
+### Default: simple face-orientation shading
+
+`mode = .legacy` in `src/lighting.zig` currently selects a fixed directional
+face factor with ambient fill for terrain previewing. Brightness depends on the
+surface normal and a fixed light direction `(1, 1, 0.8)`, so it stays stable as
+the camera moves. Point lights, sky visibility rays and GI are disabled in this
+mode. Set `mode = .direct` and rebuild to restore direct lights and sky.
+
+### Direct lights and sky
 
 `mode = .direct` in `src/lighting.zig` enables point lights (including the sun and
 lamps) and ordered sky visibility. Normal probes and indirect GI are disabled;
@@ -324,8 +517,8 @@ less sunlight and a cooler sky-dominated tint. Lamp colors remain independent.
 ### Experimental progressive global illumination
 
 `src/lighting.zig` selects the shader at build time with `mode`:
-`direct` (default), `global_illumination` (experimental), or `legacy` (original
-face-orientation shading). GI is retained for later tuning.
+`legacy` (current default, face-orientation shading), `direct`, or
+`global_illumination` (experimental). GI is retained for later tuning.
 There is no runtime shading-mode branch. Rebuild and restart after changing it.
 In GI mode, `LightingFeatures.sky_lighting`, `LightingFeatures.point_lights`,
 `gi_normal_probes`, and `gi_indirect` independently compile stages in or out.
@@ -511,3 +704,62 @@ cached (2.4×), and the exterior wall at 13 ms versus 8 ms (1.6×), averaged ove
 warm frames. Both comparisons include the traversal-bound fix. These are software
 OpenGL measurements, not RTX 3060 frame-rate predictions; cold frames and active
 streaming/editing have less reuse.
+
+### Procedural terrain rings
+
+Edited voxel blocks now skip proven-empty 4×4×4 voxel groups (or an entirely
+empty 16³ block) using the existing exact summaries. Mixed groups still use
+individual voxels, preserving thin detail, emitters and transparent glass.
+This is enabled by default; compare with
+`zig build run -Doptimize=ReleaseSafe -Dterrain-overlay-skips=false -- --gpu-stats`
+and `-Dterrain-overlay-skips=true` on the same edited scene. Unedited terrain
+is unaffected. The conservative 16³ cap around terrain overlays remains.
+`zig build test-hierarchy -Doptimize=ReleaseSafe` includes pixel/hit parity
+checks and alternating before/after software benchmarks for primary and shadow
+rays through a sparse edited block, with both GPU upload modes.
+
+Point-light objects and sky lighting currently shade only geometry rings 0 and 1.
+For terrain this covers 768 voxels in X/Z plus the 16-voxel hysteresis guard;
+the original test-scene preset covers 384 plus the guard. More distant surfaces
+use legacy face shading, with no direct-lighting cache work or visibility rays.
+Emission and optical materials still render, and distant geometry can still
+occlude lights on nearby surfaces. The cutoff follows the stable ring focus and
+applies to reflected surfaces too. Configure `direct_geometry_ring_count` in
+`src/lighting.zig` (zero restores unlimited direct lighting). Lighting sampling
+rings remain independent of this geometry-ring cutoff. The boundary is a hard
+quality switch for now. `zig build test-lighting-rings -Doptimize=ReleaseSafe`
+checks the cutoff, face brightness, cache behavior and moving focus offscreen.
+
+The runtime now starts in deterministic diamond-square terrain. Use
+`zig build run -Doptimize=ReleaseSafe -- --world=terrain --terrain-stats` for
+terrain and publication counters, or `zig build run -- --world=test-scene` for
+the original floor/wall scene and startup building.
+
+Geometry uses the shared 1/4/16/64/256 voxel hierarchy. The experimental radii
+are 384/768/1280/1792 voxels, with chunk proxies filling the remainder of the
+32×16×32 streamed window (X/Y/Z). Horizontal reach is approximately 4,096 voxels
+from the player, twice the original distance; the full footprint is 8,192×8,192
+voxels. The added area uses coarse chunk proxies. Conservative transition, interaction prefetch and
+balancing margins expand refinement around these thresholds. Lighting rings
+remain independent. Coarse columns and their shadows describe the same published
+approximation; they do not claim visibility against ungenerated finest terrain.
+
+`src/rendering.zig` owns the preset and stable focus. Configure seed, elevation,
+flat control and cache budget in `src/world/generation/terrainGenerator.zig`, and
+worker/payload budgets in `terrainStreaming.zig`. The worker reuses immutable
+column trees, samples only missing diamond-square dependencies, and evicts whole
+noise caches under a hard allocation cap. Main-thread assembly and GPU upload
+are spread across frames; complete coverage replaces the old snapshot atomically.
+The player spawns above the generated surface after exact data is ready.
+
+Picking/editing defer while canonical terrain is unavailable. Edited blocks are
+an independent in-memory overlay, survive terrain replacement and eviction, and
+apply backpressure at their memory limit. There is no disk persistence yet.
+
+`zig build generation-lod-preview -- /tmp/terrain-rings` exports height, terrain
+and five-level maps along a path crossing a superchunk boundary and returning,
+plus a CSV of samples, timings and memory. `zig build test-hierarchy` includes
+published-column ray/shadow references, terrain edits during upload, a moving
+worker test, and a bounded mixed-versus-finest rendering benchmark. See
+[the terrain implementation record](plans/todo/procedural_terrain_rings.md#9-implementation-record)
+for measured results and current limits.

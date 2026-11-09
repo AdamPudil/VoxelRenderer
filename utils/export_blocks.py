@@ -167,6 +167,26 @@ def load_manifest(path: Path) -> dict[str, int]:
     return obj
 
 
+def preserved_rotation(path: Path) -> str:
+    """Retain the authored placement mode when regenerating a descriptor."""
+    if not path.exists():
+        return ''
+    rotation = None
+    for line in path.read_text(encoding='utf-8').splitlines():
+        key, colon, value = line.strip().partition(':')
+        if not colon or key.strip().casefold() != 'rotation':
+            continue
+        if rotation is not None:
+            raise ValueError(f'Duplicate rotation attribute: {path}')
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            value = value[1:-1]
+        rotation = value.casefold()
+        if rotation not in ('none', 'yaw'):
+            raise ValueError(f'Invalid rotation attribute in {path}: {value!r}')
+    return '' if rotation is None else f'rotation: {rotation}\n'
+
+
 def run(args):
     source = args.source.resolve()
     dest = args.output.resolve()
@@ -210,12 +230,14 @@ def run(args):
                 filenames.add(stem)
                 model_file = stem + '.vox'
                 block_file = stem + '.block'
+                rotation = preserved_rotation(dest / block_file)
                 if not args.dry_run:
                     (dest / model_file).write_bytes(binary)
                     (dest / block_file).write_text(
                         f'name: {label.replace("_", " ").title()}\n'
                         f'variant: 0\n'
                         f'model: {model_file}\n'
+                        f'{rotation}'
                         f'# Omit icon to render a 64x64 PNG with the engine.\n',
                         encoding='utf-8')
                     if key not in manifest:

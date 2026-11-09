@@ -221,6 +221,7 @@ fn compileShaderFromPath(
     allocator: std.mem.Allocator,
     features: lighting.Features,
     extra_rays: u32,
+    diagnostics: bool,
 ) !c_uint {
     const raw = try loadShaderSource(allocator, path);
     defer allocator.free(raw);
@@ -230,7 +231,13 @@ fn compileShaderFromPath(
         stage_features.face_cache = false;
         stage_features.mode = .legacy;
     }
-    const src = try lighting.specialize(allocator, raw, stage_features, extra_rays);
+    // Keep the storage experiment separate from lighting/quality settings.
+    const line = (std.mem.indexOfScalar(u8, raw, '\n') orelse return error.MissingShaderVersion) + 1;
+    const configured = try std.fmt.allocPrint(allocator, "{s}#define VECTOR_WORLD_HEADERS {d}\n#define DIRECT_DIAGNOSTICS_ENABLED {d}\n{s}", .{
+        raw[0..line], @intFromBool(@import("worldBufferLayout.zig").vector_headers), @intFromBool(diagnostics and stage == .fragment), raw[line..],
+    });
+    defer allocator.free(configured);
+    const src = try lighting.specialize(allocator, configured, stage_features, extra_rays);
     defer allocator.free(src);
 
     std.debug.print("Compiling shader: {s}\n", .{path});
@@ -246,16 +253,20 @@ pub fn createProgram(path_or_stem: []const u8) !c_uint {
 }
 
 pub fn createLightingProgram(path_or_stem: []const u8, features: lighting.Features, extra_rays: u32) !c_uint {
+    return createDiagnosticProgram(path_or_stem, features, extra_rays, false);
+}
+
+pub fn createDiagnosticProgram(path_or_stem: []const u8, features: lighting.Features, extra_rays: u32, diagnostics: bool) !c_uint {
     const allocator = std.heap.page_allocator;
 
     const pair = try resolveEntryPair(path_or_stem, allocator);
     defer allocator.free(pair.vertex_path);
     defer allocator.free(pair.fragment_path);
 
-    const vs = try compileShaderFromPath(pair.vertex_path, .vertex, allocator, features, extra_rays);
+    const vs = try compileShaderFromPath(pair.vertex_path, .vertex, allocator, features, extra_rays, diagnostics);
     errdefer gl.deleteShader(vs);
 
-    const fs = try compileShaderFromPath(pair.fragment_path, .fragment, allocator, features, extra_rays);
+    const fs = try compileShaderFromPath(pair.fragment_path, .fragment, allocator, features, extra_rays, diagnostics);
     errdefer gl.deleteShader(fs);
 
     const prog = gl.createProgram();

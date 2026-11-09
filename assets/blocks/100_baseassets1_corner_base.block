@@ -1,4 +1,5 @@
 name: Baseassets1 Corner Base
 variant: 0
 model: 100_baseassets1_corner_base.vox
+rotation: yaw
 # Omit icon to render a 64x64 PNG with the engine.

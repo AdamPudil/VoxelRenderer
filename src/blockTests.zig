@@ -1,4 +1,11 @@
 test {
+    _ = @import("graphics/worldBufferLayout.zig");
+    _ = @import("graphics/worldResidency.zig");
+    _ = @import("graphics/gpuProfile.zig");
+    _ = @import("rendering.zig");
+    _ = @import("world/renderHierarchy.zig");
+    _ = @import("world/block.zig");
+    _ = @import("world/blockRotation.zig");
     _ = @import("graphics/lightingCache.zig");
     _ = @import("lighting.zig");
     _ = @import("graphics/pointLights.zig");

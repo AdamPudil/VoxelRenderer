@@ -389,3 +389,12 @@ test "parent-circle refinement includes whole selected parents and matches dense
     try std.testing.expectError(error.InvalidParentResolution, sparse.refineParentCircle(circle, 16, 8));
     try std.testing.expectEqual(count, sparse.cache.count());
 }
+
+test {
+    _ = @import("rendering.zig");
+    _ = @import("world/generation/terrainGenerator.zig");
+    _ = @import("world/terrainHierarchy.zig");
+}
+test {
+    _ = @import("world/generation/terrainStreaming.zig");
+}

@@ -46,9 +46,17 @@ pub fn main() !void {
     gl.bindVertexArray(vao);
     defer c.__glewDeleteVertexArrays.?(1, &vao);
 
-    try @import("giRenderChecks.zig").run(a);
     const args = try std.process.argsAlloc(a);
     defer std.process.argsFree(a, args);
+    if (args.len > 1 and std.mem.eql(u8, args[1], "--profile-only")) {
+        try @import("profilingRenderChecks.zig").run();
+        return;
+    }
+    try @import("hierarchyRenderChecks.zig").runLightingRings(a);
+    if (args.len > 1 and std.mem.eql(u8, args[1], "--lighting-rings-only")) return;
+    try @import("hierarchyRenderChecks.zig").run(a);
+    if (args.len > 1 and std.mem.eql(u8, args[1], "--hierarchy-only")) return;
+    try @import("giRenderChecks.zig").run(a);
     if (args.len > 1 and std.mem.eql(u8, args[1], "--gi-only")) return;
     try checkFlatLighting(a);
     try checkSkyWeights(a);
@@ -71,6 +79,7 @@ pub fn main() !void {
         // Existing optical baselines describe the legacy face-only renderer.
         const program = try gl_utils.createLightingProgram(path, .{ .face_shading = true, .point_lights = false, .sky_lighting = false }, 0);
         defer gl.deleteProgram(program);
+        try checkBlockRotation(a, program);
         var icons = try Icons.init(a, &registry, program);
         defer icons.deinit();
         for (registry.blocks.items) |entry| {
@@ -140,6 +149,46 @@ fn reflectionPixel(a: std.mem.Allocator, program: c_uint, mirror: *const @import
 
 fn scenePixel(world: *@import("world/world.zig").World, program: c_uint, eye: [3]f32, direction: [3]f32) ![4]u8 {
     return cachedScenePixel(world, program, eye, direction, null, null);
+}
+
+fn checkBlockRotation(a: std.mem.Allocator, program: c_uint) !void {
+    const World = @import("world/world.zig").World;
+    const Block = @import("world/block.zig").Block;
+    const Voxel = @import("world/voxel.zig").Voxel;
+    const rotation = @import("world/blockRotation.zig");
+    var world = try World.init(a);
+    defer world.deinit() catch {};
+    var model = try Block.initVoxel(a, 42);
+    defer model.deinit(a);
+    var green = Voxel.rgb(0, 255, 0);
+    green.luminescence = 255;
+    model.blockData.voxel.setPaletteEntry(1, green);
+    model.blockData.voxel.setPaletteEntry(2, Voxel.rgb(255, 0, 0));
+    model.blockData.voxel.setVoxel(1, 2, 3, 1);
+    model.blockData.voxel.setVoxel(4, 5, 6, 2);
+    model.light = .{ .position = .{ 1.5, 2.5, 3.5 } };
+    const views = [_][3]f32{ .{ 0, 0, -1 }, .{ -1, 0, 0 }, .{ 0, 0, 1 }, .{ 1, 0, 0 } };
+    const targets = [_][3]i32{ .{ 1, 98, 3 }, .{ 3, 98, 14 }, .{ 14, 98, 12 }, .{ 12, 98, 1 } };
+    for (views, targets) |view, target| {
+        try world.setBlockOriented(.{ 0, 6, 0 }, &model, rotation.forPlacement(.yaw, view, 0));
+        const center = [3]f32{ @as(f32, @floatFromInt(target[0])) + 0.5, @as(f32, @floatFromInt(target[1])) + 0.5, @as(f32, @floatFromInt(target[2])) + 0.5 };
+        var eye = center;
+        eye[2] += 4;
+        const pixel = try scenePixel(&world, program, eye, .{ 0, 0, -1 });
+        if (pixel[1] < 180 or pixel[0] > 2 or pixel[2] > 2) return error.RotatedVoxelNotRendered;
+        if (world.block_lights.items.len != 1 or !std.mem.eql(f32, &center, &world.block_lights.items[0].position)) return error.RotatedLightPosition;
+        const hit = world.raycast(eye, .{ 0, 0, -1 }, 8) orelse return error.RotatedVoxelNotPickable;
+        if (!std.mem.eql(i32, &hit.voxel, &target)) return error.RotatedPickMismatch;
+        // Moving the GPU region must preserve the owned orientation and light.
+        try world.render(.{ 8192, 98, 8192 });
+        if (world.block_lights.items.len != 0) return error.RotatedLightStayedInRegion;
+        const returned = try scenePixel(&world, program, eye, .{ 0, 0, -1 });
+        if (!std.mem.eql(u8, &pixel, &returned) or world.block_lights.items.len != 1) return error.RotatedBlockLostOnReentry;
+        if (!try world.removeVoxel(target)) return error.RotatedVoxelNotRemovable;
+        const removed = try scenePixel(&world, program, eye, .{ 0, 0, -1 });
+        if (std.mem.eql(u8, &pixel, &removed) or world.block_lights.items.len != 0) return error.RotatedRemovalNotRendered;
+    }
+    std.debug.print("Four placement rotations: GPU geometry, picking, lights, reentry and removal passed.\n", .{});
 }
 
 fn cachedScenePixel(world: *@import("world/world.zig").World, program: c_uint, eye: [3]f32, direction: [3]f32, cache: ?*LightingCache, light_uniforms: ?*LightUniforms) ![4]u8 {

@@ -1,11 +1,13 @@
 const std = @import("std");
 const Block = @import("block.zig").Block;
 const Voxel = @import("voxel.zig").Voxel;
+const RotationMode = @import("blockRotation.zig").Mode;
 const side = @import("worldConstants.zig").BLOCK_VOXEL_CNT;
 
 pub const Metadata = struct {
     name: []const u8,
     variant: u8 = 0,
+    rotation: RotationMode = .none,
     model: []const u8,
     icon: ?[]const u8 = null,
     format: u8 = 1,
@@ -24,6 +26,7 @@ pub fn parseMetadata(text: []const u8) !Metadata {
     var model: ?[]const u8 = null;
     var icon: ?[]const u8 = null;
     var variant: u8 = 0;
+    var rotation: RotationMode = .none;
     var version: u8 = 1;
     var color: ?[3]u8 = null;
     var reflectivity: f32 = 0;
@@ -41,7 +44,7 @@ pub fn parseMetadata(text: []const u8) !Metadata {
         const key = std.mem.trim(u8, trimmed[0..colon], " \t");
         var value = std.mem.trim(u8, trimmed[colon + 1 ..], " \t");
         if (value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"') value = value[1 .. value.len - 1];
-        const field: u16 = if (std.ascii.eqlIgnoreCase(key, "name") or std.ascii.eqlIgnoreCase(key, "block name")) 1 else if (std.ascii.eqlIgnoreCase(key, "variant")) 2 else if (std.ascii.eqlIgnoreCase(key, "model") or std.ascii.eqlIgnoreCase(key, "model path")) 4 else if (std.ascii.eqlIgnoreCase(key, "icon") or std.ascii.eqlIgnoreCase(key, "icon path")) 8 else if (std.ascii.eqlIgnoreCase(key, "format")) 16 else if (std.ascii.eqlIgnoreCase(key, "color")) 32 else if (std.ascii.eqlIgnoreCase(key, "reflectivity") or std.ascii.eqlIgnoreCase(key, "reflectiveness")) 64 else if (std.ascii.eqlIgnoreCase(key, "metallic")) 128 else if (std.ascii.eqlIgnoreCase(key, "opacity") or std.ascii.eqlIgnoreCase(key, "transparency")) 256 else if (std.ascii.eqlIgnoreCase(key, "ior")) 512 else if (std.ascii.eqlIgnoreCase(key, "emission_color")) 1024 else if (std.ascii.eqlIgnoreCase(key, "light")) 2048 else return error.UnknownBlockAttribute;
+        const field: u16 = if (std.ascii.eqlIgnoreCase(key, "name") or std.ascii.eqlIgnoreCase(key, "block name")) 1 else if (std.ascii.eqlIgnoreCase(key, "variant")) 2 else if (std.ascii.eqlIgnoreCase(key, "model") or std.ascii.eqlIgnoreCase(key, "model path")) 4 else if (std.ascii.eqlIgnoreCase(key, "icon") or std.ascii.eqlIgnoreCase(key, "icon path")) 8 else if (std.ascii.eqlIgnoreCase(key, "format")) 16 else if (std.ascii.eqlIgnoreCase(key, "color")) 32 else if (std.ascii.eqlIgnoreCase(key, "reflectivity") or std.ascii.eqlIgnoreCase(key, "reflectiveness")) 64 else if (std.ascii.eqlIgnoreCase(key, "metallic")) 128 else if (std.ascii.eqlIgnoreCase(key, "opacity") or std.ascii.eqlIgnoreCase(key, "transparency")) 256 else if (std.ascii.eqlIgnoreCase(key, "ior")) 512 else if (std.ascii.eqlIgnoreCase(key, "emission_color")) 1024 else if (std.ascii.eqlIgnoreCase(key, "light")) 2048 else if (std.ascii.eqlIgnoreCase(key, "rotation")) 4096 else return error.UnknownBlockAttribute;
         if (seen & field != 0) return error.DuplicateBlockAttribute;
         seen |= field;
         switch (field) {
@@ -80,11 +83,12 @@ pub fn parseMetadata(text: []const u8) !Metadata {
                 if (components.next() != null or values[3] <= 0 or values[4] < 0 or values[5] < 0 or values[6] < 0 or values[7] < 0) return error.InvalidPointLight;
                 light = .{ .position = values[0..3].*, .radius = values[3], .color = values[4..7].*, .intensity = values[7] };
             },
+            4096 => rotation = if (std.ascii.eqlIgnoreCase(value, "none")) .none else if (std.ascii.eqlIgnoreCase(value, "yaw")) .yaw else return error.InvalidBlockRotation,
             else => unreachable,
         }
     }
     if (name == null or name.?.len == 0 or model == null or model.?.len == 0) return error.MissingBlockAttribute;
-    return .{ .name = name.?, .model = model.?, .variant = variant, .icon = icon, .format = version, .color = color, .reflectivity = reflectivity, .metallic = metallic, .opacity = opacity, .ior = ior, .emission_color = emission_color, .light = light };
+    return .{ .name = name.?, .model = model.?, .variant = variant, .rotation = rotation, .icon = icon, .format = version, .color = color, .reflectivity = reflectivity, .metallic = metallic, .opacity = opacity, .ior = ior, .emission_color = emission_color, .light = light };
 }
 
 fn materialFactor(value: []const u8) !f32 {
@@ -110,6 +114,7 @@ pub fn encodeMetadata(allocator: std.mem.Allocator, meta: Metadata) ![]u8 {
     errdefer text.deinit();
     const w = text.writer();
     try w.print("format: 2\nname: \"{s}\"\nvariant: {d}\nmodel: \"{s}\"\n", .{ meta.name, meta.variant, meta.model });
+    try w.print("rotation: {s}\n", .{@tagName(meta.rotation)});
     if (meta.icon) |icon| try w.print("icon: \"{s}\"\n", .{icon});
     if (meta.color) |rgb| try w.print("color: {d}, {d}, {d}\n", .{ rgb[0], rgb[1], rgb[2] });
     try w.print("reflectivity: {d}\nmetallic: {d}\n", .{ meta.reflectivity, meta.metallic });
@@ -270,6 +275,27 @@ test "metadata fields, aliases, optional icon, and invalid definitions" {
     try std.testing.expectError(error.InvalidBlockVariant, parseMetadata("name: x\nmodel: a.vox\nvariant: 256"));
     try std.testing.expectError(error.DuplicateBlockAttribute, parseMetadata("name: x\nName: y\nmodel: a.vox"));
     try std.testing.expectError(error.MissingBlockAttribute, parseMetadata("name: x"));
+}
+
+test "rotation metadata defaults, validates and roundtrips in both formats" {
+    const a = std.testing.allocator;
+    try std.testing.expectEqual(RotationMode.none, (try parseMetadata("name: Old\nmodel: old.vox\n")).rotation);
+    for ([_]u8{ 1, 2 }) |format| {
+        const descriptor = try std.fmt.allocPrint(a, "format: {d}\nname: Rotating\nmodel: a.vox\nRoTaTiOn: \"YaW\"\n", .{format});
+        defer a.free(descriptor);
+        const meta = try parseMetadata(descriptor);
+        try std.testing.expectEqual(RotationMode.yaw, meta.rotation);
+        const encoded = try encodeMetadata(a, meta);
+        defer a.free(encoded);
+        try std.testing.expectEqual(RotationMode.yaw, (try parseMetadata(encoded)).rotation);
+    }
+    try std.testing.expectEqual(RotationMode.none, (try parseMetadata("name: Fixed\nmodel: a.vox\nrotation: none")).rotation);
+    try std.testing.expectError(error.DuplicateBlockAttribute, parseMetadata("name: x\nmodel: a.vox\nrotation: yaw\nRotation: none"));
+    for ([_][]const u8{ "", "true", "facing", "45" }) |value| {
+        const descriptor = try std.fmt.allocPrint(a, "name: x\nmodel: a.vox\nrotation: {s}", .{value});
+        defer a.free(descriptor);
+        try std.testing.expectError(error.InvalidBlockRotation, parseMetadata(descriptor));
+    }
 }
 
 test "versioned material descriptors roundtrip and reject invalid values" {

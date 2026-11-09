@@ -1,4 +1,5 @@
 name: Shipassets Handle
 variant: 0
 model: 120_shipassets_handle.vox
+rotation: yaw
 # Omit icon to render a 64x64 PNG with the engine.
